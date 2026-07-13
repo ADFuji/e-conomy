@@ -179,5 +179,6 @@ investi(t)     = (revenu₀ − besoins₀) × tauxBase
 supplémentaire (réparti sur les comptes de financement) qui fait atteindre l'objectif
 exactement à la date cible, en réutilisant le moteur de simulation complet — taux,
 plafonds, fiscalité et événements de vie inclus.
-#   e - c o n o m y  
+#   e - c o n o m y 
+ 
  
