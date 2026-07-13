@@ -13,9 +13,10 @@ import {
 	type LifeEvent,
 	type Project,
 	type Settings,
-	type Snapshot
+	type Snapshot,
+	type TransferRule
 } from './types';
-import { monthlyEquivalent, monthlyInvestableAt } from './finance';
+import { catchUpAccounts, distributeWithdrawal, monthlyEquivalent, monthlyInvestableAt, withdrawalOrder } from './finance';
 import { migrateAccount, migrateProject } from './migrations';
 
 const KEYS = {
@@ -25,7 +26,8 @@ const KEYS = {
 	income: 'econ.income',
 	theme: 'econ.theme',
 	lifeEvents: 'econ.lifeEvents',
-	snapshots: 'econ.snapshots'
+	snapshots: 'econ.snapshots',
+	transferRules: 'econ.transferRules'
 };
 
 export type Theme = 'light' | 'dark' | 'system';
@@ -78,6 +80,7 @@ class AppStore {
 	incomePlan = $state<IncomePlan>(migrateIncomePlan(load(KEYS.income, {})));
 	lifeEvents = $state<LifeEvent[]>(load(KEYS.lifeEvents, []));
 	snapshots = $state<Snapshot[]>(load(KEYS.snapshots, []));
+	transferRules = $state<TransferRule[]>(load(KEYS.transferRules, []));
 	theme = $state<Theme>(load<Theme>(KEYS.theme, 'system'));
 
 	constructor() {
@@ -91,6 +94,7 @@ class AppStore {
 				$effect(() => localStorage.setItem(KEYS.income, JSON.stringify(this.incomePlan)));
 				$effect(() => localStorage.setItem(KEYS.lifeEvents, JSON.stringify(this.lifeEvents)));
 				$effect(() => localStorage.setItem(KEYS.snapshots, JSON.stringify(this.snapshots)));
+				$effect(() => localStorage.setItem(KEYS.transferRules, JSON.stringify(this.transferRules)));
 				$effect(() => {
 					localStorage.setItem(KEYS.theme, this.theme);
 					this.applyTheme();
@@ -158,22 +162,76 @@ class AppStore {
 		this.projects = this.projects.filter((p) => p.id !== id);
 	}
 
+	/**
+	 * Marque un projet comme terminé et retire son montant des comptes qui le
+	 * financent : le but d'un projet est d'être dépensé, pas de fructifier
+	 * indéfiniment. Le retrait suit `withdrawalOrder` (compte courant en premier,
+	 * puis PEE > Livret > PEA pour l'immobilier, sinon du moins au plus rémunérateur).
+	 * Rattrape d'abord les soldes à aujourd'hui pour débiter des montants à jour.
+	 */
+	completeProject(id: string) {
+		const p = this.projects.find((x) => x.id === id);
+		if (!p || p.completed) return;
+
+		const fundingAccounts = p.fundingAccountIds.length
+			? this.accounts.filter((a) => p.fundingAccountIds.includes(a.id))
+			: this.accounts;
+		const caughtUp = catchUpAccounts(fundingAccounts, new Date(), this.lifeEvents);
+		const ordered = withdrawalOrder(p, caughtUp, new Date().getFullYear());
+		const available = ordered.reduce((s, a) => s + a.balance, 0);
+		const amount = Math.min(p.targetAmount, available);
+		const withdrawals = distributeWithdrawal(amount, ordered);
+
+		const todayIso = (() => {
+			const d = new Date();
+			return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+		})();
+		for (const [accountId, amt] of Object.entries(withdrawals)) {
+			const caught = caughtUp.find((a) => a.id === accountId);
+			if (!caught) continue;
+			this.updateAccount(accountId, { balance: caught.balance - amt, balanceDate: todayIso });
+		}
+
+		this.updateProject(id, {
+			completed: true,
+			completedDate: new Date().toISOString(),
+			withdrawals
+		});
+	}
+
+	/** Réouvre un projet clôturé par erreur (ne restitue PAS l'argent déjà retiré). */
+	reopenProject(id: string) {
+		this.updateProject(id, { completed: false, completedDate: undefined, withdrawals: undefined });
+	}
+
 	/** Priorité = ordre du tableau (index 0 = priorité la plus haute). */
+	// Ne réordonne qu'au sein du même statut (actif / terminé), pour qu'un projet
+	// terminé interposé dans le tableau ne perturbe pas la priorité des actifs.
 	moveProjectUp(id: string) {
 		const i = this.projects.findIndex((p) => p.id === id);
-		if (i > 0) {
-			const arr = [...this.projects];
-			[arr[i - 1], arr[i]] = [arr[i], arr[i - 1]];
-			this.projects = arr;
+		if (i <= 0) return;
+		const completed = this.projects[i].completed;
+		for (let j = i - 1; j >= 0; j--) {
+			if (!!this.projects[j].completed === !!completed) {
+				const arr = [...this.projects];
+				[arr[j], arr[i]] = [arr[i], arr[j]];
+				this.projects = arr;
+				return;
+			}
 		}
 	}
 
 	moveProjectDown(id: string) {
 		const i = this.projects.findIndex((p) => p.id === id);
-		if (i >= 0 && i < this.projects.length - 1) {
-			const arr = [...this.projects];
-			[arr[i + 1], arr[i]] = [arr[i], arr[i + 1]];
-			this.projects = arr;
+		if (i < 0) return;
+		const completed = this.projects[i].completed;
+		for (let j = i + 1; j < this.projects.length; j++) {
+			if (!!this.projects[j].completed === !!completed) {
+				const arr = [...this.projects];
+				[arr[j], arr[i]] = [arr[i], arr[j]];
+				this.projects = arr;
+				return;
+			}
 		}
 	}
 
@@ -192,6 +250,23 @@ class AppStore {
 
 	removeLifeEvent(id: string) {
 		this.lifeEvents = this.lifeEvents.filter((e) => e.id !== id);
+	}
+
+	// ----- Règles de virement -----------------------------------------------------
+
+	addTransferRule(data: Omit<TransferRule, 'id'>): TransferRule {
+		const rule: TransferRule = { ...data, id: uid() };
+		this.transferRules.push(rule);
+		return rule;
+	}
+
+	updateTransferRule(id: string, patch: Partial<TransferRule>) {
+		const i = this.transferRules.findIndex((r) => r.id === id);
+		if (i >= 0) this.transferRules[i] = { ...this.transferRules[i], ...patch };
+	}
+
+	removeTransferRule(id: string) {
+		this.transferRules = this.transferRules.filter((r) => r.id !== id);
 	}
 
 	// ----- Pointages (snapshots) -------------------------------------------------
@@ -283,7 +358,8 @@ class AppStore {
 				settings: this.settings,
 				incomePlan: this.incomePlan,
 				lifeEvents: this.lifeEvents,
-				snapshots: this.snapshots
+				snapshots: this.snapshots,
+				transferRules: this.transferRules
 			},
 			null,
 			2
@@ -298,6 +374,7 @@ class AppStore {
 		if (data.incomePlan) this.incomePlan = migrateIncomePlan(data.incomePlan);
 		if (Array.isArray(data.lifeEvents)) this.lifeEvents = data.lifeEvents;
 		if (Array.isArray(data.snapshots)) this.snapshots = data.snapshots;
+		if (Array.isArray(data.transferRules)) this.transferRules = data.transferRules;
 		this.recomputeMilestones();
 	}
 
@@ -308,6 +385,7 @@ class AppStore {
 		this.incomePlan = createDefaultIncomePlan();
 		this.lifeEvents = [];
 		this.snapshots = [];
+		this.transferRules = [];
 	}
 
 	/** Jeu de données de démonstration pour explorer l'app rapidement. */
@@ -438,12 +516,30 @@ class AppStore {
 		};
 		this.snapshots = [mk(3, 0.985), mk(2, 0.99), mk(1, 1.0), mk(0, 1.008)];
 
+		// Règle de virement : une fois par an, en décembre (juste après le calcul des
+		// intérêts), l'excédent du compte courant part sur le PEE, dans la limite de
+		// 25 % du salaire brut annuel.
+		this.transferRules = [
+			{
+				id: uid(),
+				label: "Versement annuel PEE",
+				fromAccountId: courant,
+				toAccountId: pee,
+				frequency: 'annual',
+				month: 12,
+				maxPctOfGrossIncome: 25,
+				minSourceBalance: 1000,
+				enabled: true
+			}
+		];
+
 		// Plan de revenus : salaire 2 600 €, +2,5 %/an, augmentation ponctuelle de
 		// 300 €/mois dans 2 ans ; besoins vitaux détaillés (1 700 €). On épargne 45 %
 		// du surplus actuel et 85 % des revenus supplémentaires (la « prime »).
 		this.incomePlan = {
 			enabled: true,
 			netMonthlyIncome: 2600,
+			grossMonthlyIncome: 3350,
 			annualRaisePct: 2.5,
 			raises: [{ id: uid(), year: year + 2, amount: 300 }],
 			expenses: [
@@ -489,6 +585,18 @@ class AppStore {
 				color: PALETTE[6],
 				fundingAccountIds: [],
 				createdAt: new Date().toISOString()
+			},
+			{
+				id: uid(),
+				name: 'Voyage en Islande',
+				targetAmount: 2500,
+				category: 'voyage',
+				color: PALETTE[8],
+				fundingAccountIds: [courant],
+				completed: true,
+				completedDate: new Date(year, new Date().getMonth() - 1, 15).toISOString(),
+				withdrawals: { [courant]: 2500 },
+				createdAt: new Date(year, new Date().getMonth() - 4, 1).toISOString()
 			}
 		];
 

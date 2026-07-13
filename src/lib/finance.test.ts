@@ -1,17 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import type { Account, IncomePlan, Project } from './types';
+import type { Account, IncomePlan, Project, TransferRule } from './types';
 import {
 	applyTaxToFactor,
+	capitalNeededForRente,
 	catchUpAccount,
 	catchUpAccounts,
+	computeProjectWithdrawals,
+	currentAllocationSplit,
 	deflateSeries,
+	distributeWithdrawal,
 	estimateRate,
 	linearFit,
 	monthlyGrowthFactor,
 	monthsBetween,
+	recommendedAllocation,
+	renteFromCapital,
 	requiredMonthlyContribution,
 	simulatePortfolio,
-	waterfallProjectAllocations
+	waterfallProjectAllocations,
+	withdrawalOrder
 } from './finance';
 
 function mkAccount(overrides: Partial<Account> = {}): Account {
@@ -28,6 +35,19 @@ function mkAccount(overrides: Partial<Account> = {}): Account {
 		extrapolateRates: true,
 		defaultRate: 0,
 		color: '#000',
+		createdAt: '2026-01-01T00:00:00.000Z',
+		...overrides
+	};
+}
+
+function mkProject(overrides: Partial<Project> = {}): Project {
+	return {
+		id: overrides.id ?? 'proj',
+		name: 'Test',
+		targetAmount: 1000,
+		category: 'autre',
+		color: '#000',
+		fundingAccountIds: [],
 		createdAt: '2026-01-01T00:00:00.000Z',
 		...overrides
 	};
@@ -287,6 +307,7 @@ describe('plan de revenus minimal', () => {
 		const plan: IncomePlan = {
 			enabled: false,
 			netMonthlyIncome: 3000,
+			grossMonthlyIncome: 3800,
 			annualRaisePct: 0,
 			raises: [],
 			expenses: [],
@@ -298,5 +319,239 @@ describe('plan de revenus minimal', () => {
 		const acc = mkAccount({ hasYield: false, balance: 0 });
 		const { total } = simulatePortfolio([acc], 6, { start: new Date(2026, 0, 1), plan });
 		expect(total[6].balance).toBe(0);
+	});
+});
+
+describe('withdrawalOrder', () => {
+	it('always drains the compte courant first', () => {
+		const courant = mkAccount({ id: 'c', type: 'courant', hasYield: false });
+		const livret = mkAccount({ id: 'l', type: 'livret', defaultRate: 3, ratesByYear: {} });
+		const order = withdrawalOrder(mkProject({ category: 'voyage' }), [livret, courant], 2026);
+		expect(order[0].id).toBe('c');
+	});
+
+	it('drains the lowest-yield account first by default (courant excepted)', () => {
+		const highYield = mkAccount({ id: 'hi', type: 'pea', defaultRate: 8 });
+		const lowYield = mkAccount({ id: 'lo', type: 'livret', defaultRate: 2 });
+		const order = withdrawalOrder(mkProject({ category: 'voyage' }), [highYield, lowYield], 2026);
+		expect(order.map((a) => a.id)).toEqual(['lo', 'hi']);
+	});
+
+	it('uses PEE > Livret > PEA for a real-estate project, after courant', () => {
+		const pea = mkAccount({ id: 'pea', type: 'pea' });
+		const pee = mkAccount({ id: 'pee', type: 'pee' });
+		const livret = mkAccount({ id: 'livret', type: 'livret' });
+		const courant = mkAccount({ id: 'courant', type: 'courant', hasYield: false });
+		const order = withdrawalOrder(mkProject({ category: 'maison' }), [pea, courant, livret, pee], 2026);
+		expect(order.map((a) => a.id)).toEqual(['courant', 'pee', 'livret', 'pea']);
+	});
+});
+
+describe('distributeWithdrawal', () => {
+	it('takes from accounts in order, capped at each balance, until the amount is covered', () => {
+		const a = mkAccount({ id: 'a', balance: 100 });
+		const b = mkAccount({ id: 'b', balance: 500 });
+		const result = distributeWithdrawal(300, [a, b]);
+		expect(result).toEqual({ a: 100, b: 200 });
+	});
+
+	it('takes at most what is available, even if the pool falls short', () => {
+		const a = mkAccount({ id: 'a', balance: 50 });
+		const result = distributeWithdrawal(300, [a]);
+		expect(result).toEqual({ a: 50 });
+	});
+});
+
+describe('computeProjectWithdrawals', () => {
+	it('produces a negative life event at the target date, skipping completed projects', () => {
+		const acc = mkAccount({ id: 'a', balance: 5000, hasYield: false });
+		const active = mkProject({ id: 'p1', targetAmount: 1000, targetDate: '2026-06-01', fundingAccountIds: ['a'] });
+		const done = mkProject({ id: 'p2', targetAmount: 1000, completed: true, fundingAccountIds: ['a'] });
+
+		const events = computeProjectWithdrawals([active, done], [acc], 12, { start: new Date(2026, 0, 1) });
+
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({ accountId: 'a', amount: -1000, year: 2026, month: 6 });
+	});
+
+	it('spreads the withdrawal across accounts per withdrawalOrder when one is insufficient', () => {
+		const courant = mkAccount({ id: 'c', type: 'courant', hasYield: false, balance: 300 });
+		const livret = mkAccount({ id: 'l', type: 'livret', hasYield: false, balance: 5000 });
+		const project = mkProject({ targetAmount: 1000, targetDate: '2026-03-01', fundingAccountIds: ['c', 'l'] });
+
+		const events = computeProjectWithdrawals([project], [courant, livret], 12, { start: new Date(2026, 0, 1) });
+		const byAccount = Object.fromEntries(events.map((e) => [e.accountId, -e.amount]));
+		expect(byAccount.c).toBeCloseTo(300, 6);
+		expect(byAccount.l).toBeCloseTo(700, 6);
+	});
+
+	it('processes withdrawals chronologically so a later project never sees money already spent (regression)', () => {
+		// Deux projets visent le même compte, à la même échéance, pour un total
+		// (1500) supérieur au solde disponible (1000). Avant la correction, les
+		// deux étaient calculés indépendamment sur le même solde de départ et
+		// pouvaient ensemble faire passer le compte négatif une fois cumulés.
+		const courant = mkAccount({ id: 'c', type: 'courant', hasYield: false, balance: 1000 });
+		const p1 = mkProject({ id: 'p1', name: 'A', targetAmount: 800, targetDate: '2026-03-01', fundingAccountIds: ['c'] });
+		const p2 = mkProject({ id: 'p2', name: 'B', targetAmount: 700, targetDate: '2026-03-01', fundingAccountIds: ['c'] });
+
+		const events = computeProjectWithdrawals([p1, p2], [courant], 12, { start: new Date(2026, 0, 1) });
+		const totalWithdrawn = events.reduce((s, e) => s - e.amount, 0);
+
+		expect(totalWithdrawn).toBeLessThanOrEqual(1000 + 1e-6);
+
+		// Le compte, une fois les deux retraits appliqués, ne doit jamais finir négatif.
+		const { total } = simulatePortfolio([courant], 12, {
+			start: new Date(2026, 0, 1),
+			lifeEvents: events
+		});
+		for (const p of total) expect(p.balance).toBeGreaterThanOrEqual(-1e-6);
+	});
+
+	it('an accepted-but-later project sees the reduced balance left by an earlier one on the same account', () => {
+		const courant = mkAccount({ id: 'c', type: 'courant', hasYield: false, balance: 1000 });
+		const early = mkProject({ id: 'p1', name: 'Early', targetAmount: 600, targetDate: '2026-02-01', fundingAccountIds: ['c'] });
+		const later = mkProject({ id: 'p2', name: 'Later', targetAmount: 600, targetDate: '2026-06-01', fundingAccountIds: ['c'] });
+
+		const events = computeProjectWithdrawals([early, later], [courant], 12, { start: new Date(2026, 0, 1) });
+		const byProject = Object.fromEntries(events.map((e) => [e.id.split('-')[1], -e.amount]));
+
+		expect(byProject.p1).toBeCloseTo(600, 6); // le premier prend son plein montant
+		expect(byProject.p2).toBeCloseTo(400, 6); // le second ne trouve que le reste (1000 - 600)
+	});
+
+	it('uses the full account universe for income-allocation weights, not just the funding subset (regression)', () => {
+		// "a" ne reçoit que 1/3 de l'épargne mensuelle (poids 1 sur 3), "b" les 2/3
+		// restants (poids 2). Si la simulation interne d'un projet ne financant que
+		// "a" oublie de préciser l'univers complet des comptes, "b" disparaît du
+		// calcul des poids et "a" se retrouve à tort crédité de 100 % de l'épargne.
+		const a = mkAccount({ id: 'a', hasYield: false, balance: 0 });
+		const b = mkAccount({ id: 'b', hasYield: false, balance: 0 });
+		const plan: IncomePlan = {
+			enabled: true,
+			netMonthlyIncome: 3000,
+			grossMonthlyIncome: 3000,
+			annualRaisePct: 0,
+			raises: [],
+			expenses: [],
+			expenseInflationPct: 0,
+			baseSavingsRate: 100,
+			raiseSavingsRate: 100,
+			allocation: { a: 1, b: 2 }
+		};
+		const project = mkProject({ targetAmount: 2500, targetDate: '2026-03-01', fundingAccountIds: ['a'] });
+
+		// Ne passe pas `allAccounts` explicitement : exactement le scénario qui a
+		// révélé le bug (l'appelant se repose sur `computeProjectWithdrawals` pour
+		// reconstituer l'univers complet à partir de son paramètre `accounts`).
+		const events = computeProjectWithdrawals([project], [a, b], 12, { start: new Date(2026, 0, 1), plan });
+		const withdrawn = events.filter((e) => e.accountId === 'a').reduce((s, e) => s - e.amount, 0);
+
+		// Avec la pondération correcte (1/3 de 3000€ sur 2 mois = 2000€), le retrait
+		// est plafonné à 2000, pas au montant cible de 2500 (qui supposerait à tort
+		// que "a" a reçu 100 % de l'épargne).
+		expect(withdrawn).toBeCloseTo(2000, 1);
+	});
+});
+
+describe('simulatePortfolio — règles de virement', () => {
+	it('fires an annual rule only in its configured month, capped at % of gross income', () => {
+		const courant = mkAccount({ id: 'c', type: 'courant', hasYield: false, balance: 10000 });
+		const pee = mkAccount({ id: 'p', type: 'pee', hasYield: false, balance: 0 });
+		const plan: IncomePlan = {
+			enabled: true,
+			netMonthlyIncome: 2000,
+			grossMonthlyIncome: 2500, // 30 000 €/an brut
+			annualRaisePct: 0,
+			raises: [],
+			expenses: [],
+			expenseInflationPct: 0,
+			baseSavingsRate: 0,
+			raiseSavingsRate: 0,
+			allocation: {}
+		};
+		const rule: TransferRule = {
+			id: 'r1',
+			label: 'PEE',
+			fromAccountId: 'c',
+			toAccountId: 'p',
+			frequency: 'annual',
+			month: 6,
+			maxPctOfGrossIncome: 25, // 25% de 30 000 = 7 500
+			enabled: true
+		};
+		const { per } = simulatePortfolio([courant, pee], 12, {
+			start: new Date(2026, 0, 1),
+			plan,
+			transferRules: [rule]
+		});
+		const peePoints = per.find((p) => p.account.id === 'p')!.points;
+		// Le mois 5 (index dans la boucle) tombe en juin 2026 (départ = janvier,
+		// mois 0) : rien avant, 7 500 exactement à partir de ce mois-là.
+		expect(peePoints[4].balance).toBe(0);
+		expect(peePoints[5].balance).toBeCloseTo(7500, 6);
+		expect(peePoints[12].balance).toBeCloseTo(7500, 6); // ne se redéclenche pas avant l'année suivante (hors horizon)
+	});
+
+	it('never pulls the source below minSourceBalance', () => {
+		const courant = mkAccount({ id: 'c', type: 'courant', hasYield: false, balance: 1200 });
+		const livret = mkAccount({ id: 'l', type: 'livret', hasYield: false, balance: 0 });
+		const rule: TransferRule = {
+			id: 'r1',
+			label: 'x',
+			fromAccountId: 'c',
+			toAccountId: 'l',
+			frequency: 'monthly',
+			minSourceBalance: 1000,
+			enabled: true
+		};
+		const { per } = simulatePortfolio([courant, livret], 1, {
+			start: new Date(2026, 0, 1),
+			transferRules: [rule]
+		});
+		const c = per.find((p) => p.account.id === 'c')!.points[1].balance;
+		expect(c).toBeCloseTo(1000, 6);
+	});
+
+	it('a disabled rule never fires', () => {
+		const courant = mkAccount({ id: 'c', type: 'courant', hasYield: false, balance: 1000 });
+		const livret = mkAccount({ id: 'l', type: 'livret', hasYield: false, balance: 0 });
+		const rule: TransferRule = {
+			id: 'r1',
+			label: 'x',
+			fromAccountId: 'c',
+			toAccountId: 'l',
+			frequency: 'monthly',
+			enabled: false
+		};
+		const { per } = simulatePortfolio([courant, livret], 1, {
+			start: new Date(2026, 0, 1),
+			transferRules: [rule]
+		});
+		expect(per.find((p) => p.account.id === 'l')!.points[1].balance).toBe(0);
+	});
+});
+
+describe('rente / indépendance financière', () => {
+	it('capitalNeededForRente and renteFromCapital are inverses at a given rate', () => {
+		const capital = capitalNeededForRente(2000, 4); // 2000€/mois, retrait 4%/an
+		expect(capital).toBeCloseTo(600000, 6); // 2000*12 / 0.04
+		expect(renteFromCapital(capital, 4)).toBeCloseTo(2000, 6);
+	});
+
+	it('a higher withdrawal rate requires less capital for the same rente', () => {
+		expect(capitalNeededForRente(2000, 5)).toBeLessThan(capitalNeededForRente(2000, 3));
+	});
+
+	it('currentAllocationSplit buckets accounts into growth vs safe', () => {
+		const pea = mkAccount({ id: 'pea', type: 'pea', balance: 300 });
+		const livret = mkAccount({ id: 'l', type: 'livret', balance: 700 });
+		const split = currentAllocationSplit([pea, livret]);
+		expect(split).toEqual({ growth: 300, safe: 700 });
+	});
+
+	it('recommendedAllocation favors growth far from the goal and safety close to it', () => {
+		expect(recommendedAllocation(20).growthPct).toBe(70);
+		expect(recommendedAllocation(10).growthPct).toBe(50);
+		expect(recommendedAllocation(2).growthPct).toBe(30);
 	});
 });

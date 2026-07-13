@@ -165,6 +165,15 @@ export interface Project {
 	 * pointages mensuels. Rempli automatiquement, jamais saisi à la main.
 	 */
 	milestonesAchieved?: Partial<Record<MilestoneKey, string>>;
+	/**
+	 * Le projet est-il terminé (argent dépensé) ? Un projet terminé n'est plus
+	 * simulé comme objectif actif : son montant a déjà été retiré des comptes.
+	 */
+	completed?: boolean;
+	/** Date (ISO) à laquelle le projet a été marqué terminé. */
+	completedDate?: string;
+	/** Montant réellement retiré de chaque compte à la clôture du projet. */
+	withdrawals?: Record<string, number>;
 	createdAt: string;
 }
 
@@ -182,6 +191,8 @@ export interface Settings {
 	scenarioDeltaPct: number;
 	/** Comment l'épargne est répartie entre projets qui se partagent des comptes. */
 	projectAllocationMode: ProjectAllocationMode;
+	/** Taux de retrait annuel visé pour la rente (%), ex. 4 pour la « règle des 4 % ». */
+	withdrawalRatePct: number;
 }
 
 /** Événement de vie ponctuel : dépense ou rentrée exceptionnelle sur un compte donné. */
@@ -212,8 +223,33 @@ export const DEFAULT_SETTINGS: Settings = {
 	defaultHorizonYears: 10,
 	generalInflationPct: 2,
 	scenarioDeltaPct: 1.5,
-	projectAllocationMode: 'shared'
+	projectAllocationMode: 'shared',
+	withdrawalRatePct: 4
 };
+
+/**
+ * Règle de virement automatique entre deux comptes, avec contraintes (fréquence,
+ * montant maximum, plafond en % du salaire brut annuel). Utile pour des dispositifs
+ * comme un PEE alimenté une fois par an, dans la limite de 25 % du salaire brut.
+ */
+export type TransferFrequency = 'monthly' | 'annual';
+
+export interface TransferRule {
+	id: string;
+	label: string;
+	fromAccountId: string;
+	toAccountId: string;
+	frequency: TransferFrequency;
+	/** Mois d'exécution (1-12), utilisé seulement si frequency = 'annual'. */
+	month?: number;
+	/** Montant maximum transféré à chaque exécution. Vide = illimité. */
+	maxAmount?: number;
+	/** Plafonne le montant transféré à un % du salaire brut annuel (plan de revenus). */
+	maxPctOfGrossIncome?: number;
+	/** Solde minimum à laisser sur le compte source (le virement ne le fait jamais passer en dessous). */
+	minSourceBalance?: number;
+	enabled: boolean;
+}
 
 /** Augmentation ponctuelle : montant mensuel supplémentaire à partir d'une année. */
 export interface Raise {
@@ -255,6 +291,11 @@ export interface IncomePlan {
 	enabled: boolean;
 	/** Salaire net mensuel actuel. */
 	netMonthlyIncome: number;
+	/**
+	 * Salaire brut mensuel actuel (optionnel). Sert uniquement de référence pour
+	 * les règles de virement plafonnées en % du brut (ex. versement PEE).
+	 */
+	grossMonthlyIncome: number;
 	/** Évolution annuelle moyenne du salaire (%). */
 	annualRaisePct: number;
 	/** Augmentations exceptionnelles (ex. +400 €/mois à partir de 2028). */
@@ -275,6 +316,7 @@ export function createDefaultIncomePlan(): IncomePlan {
 	return {
 		enabled: false,
 		netMonthlyIncome: 2500,
+		grossMonthlyIncome: 3200,
 		annualRaisePct: 2,
 		raises: [],
 		expenses: starterExpenses(),

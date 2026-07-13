@@ -43,10 +43,11 @@ export function migrateAccount(a: Record<string, unknown>): Account {
 	};
 }
 
-/** Met à niveau un projet issu d'une ancienne version (pas de jalons atteints). */
+/** Met à niveau un projet issu d'une ancienne version (pas de jalons atteints, pas de clôture). */
 export function migrateProject(p: Record<string, unknown>): Project {
 	return {
 		...(p as unknown as Project),
-		milestonesAchieved: (p.milestonesAchieved as Project['milestonesAchieved']) ?? {}
+		milestonesAchieved: (p.milestonesAchieved as Project['milestonesAchieved']) ?? {},
+		completed: typeof p.completed === 'boolean' ? p.completed : false
 	};
 }
