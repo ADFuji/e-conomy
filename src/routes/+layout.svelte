@@ -3,6 +3,9 @@
 	import { page } from '$app/state';
 	import { browser, dev } from '$app/environment';
 	import { store } from '$lib/store.svelte';
+	import { injectAnalytics } from '@vercel/analytics/sveltekit';
+
+	injectAnalytics({ mode: dev ? 'development' : 'production' });
 
 	let { children } = $props();
 
