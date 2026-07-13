@@ -25,6 +25,7 @@
 		{ href: '/projets', label: 'Projets', icon: '🎯' },
 		{ href: '/simulations', label: 'Simulations', icon: '📈' },
 		{ href: '/pointage', label: 'Pointage', icon: '📍' },
+		{ href: '/independance', label: 'Indépendance', icon: '🏖️' },
 		{ href: '/parametres', label: 'Paramètres', icon: '⚙️' }
 	];
 

@@ -5,7 +5,9 @@
 		projectProjection,
 		simulatePortfolio,
 		waterfallProjectAllocations,
-		requiredMonthlyContribution
+		requiredMonthlyContribution,
+		withdrawalOrder,
+		distributeWithdrawal
 	} from '$lib/finance';
 	import { PROJECT_CATEGORIES, MILESTONE_FRACTIONS, MILESTONE_KEYS, type Project } from '$lib/types';
 	import Modal from '$lib/components/Modal.svelte';
@@ -15,11 +17,33 @@
 	let showForm = $state(false);
 	let editing = $state<Project | null>(null);
 	let confirmDelete = $state<Project | null>(null);
+	let confirmComplete = $state<Project | null>(null);
 	let solverResults = $state<Record<string, number | null | undefined>>({});
+
+	const activeProjects = $derived(store.projects.filter((p) => !p.completed));
+	const completedProjects = $derived(store.projects.filter((p) => p.completed));
+
+	// Aperçu de la répartition du retrait, affiché dans la confirmation de clôture.
+	const completePreview = $derived.by(() => {
+		if (!confirmComplete) return null;
+		const p = confirmComplete;
+		const fundingAccounts = p.fundingAccountIds.length
+			? store.accounts.filter((a) => p.fundingAccountIds.includes(a.id))
+			: store.accounts;
+		const ordered = withdrawalOrder(p, fundingAccounts, new Date().getFullYear());
+		const available = ordered.reduce((s, a) => s + a.balance, 0);
+		const amount = Math.min(p.targetAmount, available);
+		return { amount, breakdown: distributeWithdrawal(amount, ordered) };
+	});
 
 	const horizon = $derived(store.settings.defaultHorizonYears);
 	const months = $derived(horizon * 12);
-	const simOpts = $derived({ plan: store.incomePlan, lifeEvents: store.lifeEvents, allAccounts: store.accounts });
+	const simOpts = $derived({
+		plan: store.incomePlan,
+		lifeEvents: store.lifeEvents,
+		allAccounts: store.accounts,
+		transferRules: store.transferRules
+	});
 	const priorityMode = $derived(store.settings.projectAllocationMode === 'priority');
 
 	// En mode priorité, l'épargne totale finance les projets dans l'ordre, en
@@ -28,7 +52,7 @@
 	// individuels, pour rester lisible.
 	const pool = $derived(simulatePortfolio(store.accounts, months, simOpts));
 	const priorityAllocations = $derived(
-		priorityMode ? waterfallProjectAllocations(store.projects, pool.total) : []
+		priorityMode ? waterfallProjectAllocations(activeProjects, pool.total) : []
 	);
 	function allocationFor(id: string) {
 		return priorityAllocations.find((a) => a.projectId === id);
@@ -70,7 +94,7 @@
 	<button class="btn btn-primary" onclick={openNew}>＋ Nouveau projet</button>
 </div>
 
-{#if store.projects.length > 1}
+{#if activeProjects.length > 1}
 	<div class="card card-pad mode-row">
 		<div>
 			<span class="section-title">Allocation entre projets</span>
@@ -100,8 +124,11 @@
 		<button class="btn btn-primary" onclick={openNew}>Créer un projet</button>
 	</div>
 {:else}
+	{#if activeProjects.length === 0}
+		<p class="muted" style="margin-bottom:16px">Tous vos projets sont terminés. 🎉</p>
+	{/if}
 	<div class="projects">
-		{#each store.projects as p, i (p.id)}
+		{#each activeProjects as p, i (p.id)}
 			{@const proj = projectProjection(p, store.accounts, months, simOpts)}
 			{@const alloc = allocationFor(p.id)}
 			{@const current = priorityMode && alloc ? alloc.current : proj.current}
@@ -116,7 +143,7 @@
 								<div class="reorder">
 									<button class="btn btn-icon btn-ghost reorder-btn" disabled={i === 0} onclick={() => store.moveProjectUp(p.id)} aria-label="Monter">▲</button>
 									<span class="rank tnum">{i + 1}</span>
-									<button class="btn btn-icon btn-ghost reorder-btn" disabled={i === store.projects.length - 1} onclick={() => store.moveProjectDown(p.id)} aria-label="Descendre">▼</button>
+									<button class="btn btn-icon btn-ghost reorder-btn" disabled={i === activeProjects.length - 1} onclick={() => store.moveProjectDown(p.id)} aria-label="Descendre">▼</button>
 								</div>
 							{/if}
 							<span class="pr-icon">{catInfo(p.category)?.icon}</span>
@@ -222,6 +249,10 @@
 							{/each}
 						{/if}
 					</div>
+
+					<button type="button" class="btn btn-sm complete-btn" onclick={() => (confirmComplete = p)}>
+						✅ Marquer comme terminé
+					</button>
 				</div>
 
 				<div class="pr-chart">
@@ -233,6 +264,36 @@
 			</div>
 		{/each}
 	</div>
+
+	{#if completedProjects.length > 0}
+		<div class="completed-section">
+			<span class="section-title">Projets terminés</span>
+			<div class="completed-list">
+				{#each completedProjects as p (p.id)}
+					<div class="card card-pad completed-card">
+						<div class="spread">
+							<span class="cp-name">{catInfo(p.category)?.icon} {p.name}</span>
+							<span class="tnum" style="font-weight:700">{money(p.targetAmount)}</span>
+						</div>
+						<div class="faint" style="font-size:12px;margin:4px 0 8px">
+							Clôturé le {p.completedDate ? fullDate(p.completedDate) : '—'}
+						</div>
+						{#if p.withdrawals}
+							<div class="cp-withdrawals">
+								{#each Object.entries(p.withdrawals) as [accId, amt] (accId)}
+									<span class="badge">{store.getAccount(accId)?.name ?? '—'} : −{money(amt)}</span>
+								{/each}
+							</div>
+						{/if}
+						<div class="row" style="justify-content:flex-end;margin-top:10px">
+							<button class="btn btn-sm" onclick={() => store.reopenProject(p.id)}>↩️ Réouvrir</button>
+							<button class="btn btn-icon btn-danger" onclick={() => (confirmDelete = p)} aria-label="Supprimer">🗑️</button>
+						</div>
+					</div>
+				{/each}
+			</div>
+		</div>
+	{/if}
 {/if}
 
 <Modal bind:open={showForm} title={editing ? 'Modifier le projet' : 'Nouveau projet'} width={600}>
@@ -257,6 +318,45 @@
 				}}
 			>
 				Supprimer
+			</button>
+		</div>
+	{/if}
+</Modal>
+
+<Modal
+	bind:open={() => !!confirmComplete, (v) => { if (!v) confirmComplete = null; }}
+	title="Marquer le projet comme terminé"
+	width={460}
+>
+	{#if confirmComplete && completePreview}
+		<p>
+			<strong>{confirmComplete.name}</strong> sera marqué terminé et
+			<strong class="tnum">{money(completePreview.amount)}</strong> sera retiré de vos comptes :
+		</p>
+		<div class="preview-list">
+			{#each Object.entries(completePreview.breakdown) as [accId, amt] (accId)}
+				<div class="spread">
+					<span>{store.getAccount(accId)?.name ?? '—'}</span>
+					<span class="tnum" style="font-weight:600">−{money(amt)}</span>
+				</div>
+			{/each}
+		</div>
+		{#if completePreview.amount < confirmComplete.targetAmount}
+			<p class="neg" style="font-size:13px;margin-top:10px">
+				⚠️ Solde disponible insuffisant : seuls {money(completePreview.amount)} sur
+				{money(confirmComplete.targetAmount)} pourront être retirés.
+			</p>
+		{/if}
+		<div class="row" style="justify-content:flex-end;margin-top:20px">
+			<button class="btn btn-ghost" onclick={() => (confirmComplete = null)}>Annuler</button>
+			<button
+				class="btn btn-primary"
+				onclick={() => {
+					if (confirmComplete) store.completeProject(confirmComplete.id);
+					confirmComplete = null;
+				}}
+			>
+				Confirmer la clôture
 			</button>
 		</div>
 	{/if}
@@ -429,11 +529,47 @@
 		gap: 6px;
 		margin-top: 14px;
 	}
+	.complete-btn {
+		margin-top: 12px;
+		width: 100%;
+		justify-content: center;
+		color: var(--pos);
+	}
 	.pr-chart {
 		border-top: 1px solid var(--border);
 		padding: 14px 8px 4px;
 		background: var(--surface-2);
 		margin-top: auto;
+	}
+	.completed-section {
+		margin-top: 28px;
+	}
+	.completed-list {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+		gap: 12px;
+		margin-top: 10px;
+	}
+	.completed-card {
+		opacity: 0.85;
+	}
+	.cp-name {
+		font-weight: 600;
+	}
+	.cp-withdrawals {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+	.preview-list {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		margin-top: 12px;
+		padding: 10px 12px;
+		border-radius: 9px;
+		background: var(--surface-2);
+		font-size: 14px;
 	}
 	@media (max-width: 460px) {
 		.projects {

@@ -6,7 +6,16 @@
 // de revenus. Chaque mois : croissance + versements + événements, puis
 // plafonds/cascade.
 
-import type { Account, Compounding, Contribution, IncomePlan, LifeEvent, Project } from './types';
+import type {
+	Account,
+	AccountType,
+	Compounding,
+	Contribution,
+	IncomePlan,
+	LifeEvent,
+	Project,
+	TransferRule
+} from './types';
 
 export interface SimPoint {
 	monthIndex: number;
@@ -182,6 +191,12 @@ export function monthlyInvestableAt(plan: IncomePlan, monthIndex: number, date: 
 	return base + fromRaises;
 }
 
+/** Salaire brut mensuel au mois `monthIndex` (même courbe de croissance que le net). */
+export function monthlyGrossIncomeAt(plan: IncomePlan, monthIndex: number): number {
+	const years = monthIndex / 12;
+	return (plan.grossMonthlyIncome || 0) * Math.pow(1 + plan.annualRaisePct / 100, years);
+}
+
 /** Fractions d'allocation (normalisées) de l'épargne vers les comptes. */
 export function incomeAllocationWeights(
 	plan: IncomePlan,
@@ -236,6 +251,8 @@ export interface SimOptions {
 	rateDeltaPct?: number;
 	/** Verse un extra mensuel uniforme, réparti à parts égales entre les comptes simulés (solveur). */
 	extraMonthly?: number;
+	/** Règles de virement automatique entre comptes (fréquence, plafonds). */
+	transferRules?: TransferRule[];
 }
 
 export interface PortfolioSimulation {
@@ -317,7 +334,33 @@ function runSimulation(
 			r.principal += contrib;
 		}
 
-		// 2. Plafonds & cascade : l'excédent est viré vers le compte de débordement.
+		// 2. Règles de virement automatique (ex. versement PEE une fois par an,
+		// juste après le calcul des intérêts, plafonné en % du salaire brut).
+		for (const rule of opts.transferRules ?? []) {
+			if (!rule.enabled) continue;
+			const month = d.getMonth() + 1;
+			const fires = rule.frequency === 'monthly' || (rule.frequency === 'annual' && (rule.month ?? 1) === month);
+			if (!fires) continue;
+			const source = byId.get(rule.fromAccountId);
+			const target = byId.get(rule.toAccountId);
+			if (!source || !target) continue;
+
+			const floor = rule.minSourceBalance ?? 0;
+			let amount = Math.max(0, source.balance - floor);
+			if (rule.maxAmount !== undefined) amount = Math.min(amount, rule.maxAmount);
+			if (rule.maxPctOfGrossIncome !== undefined && plan) {
+				const grossAnnual = monthlyGrossIncomeAt(plan, m) * 12;
+				amount = Math.min(amount, grossAnnual * (rule.maxPctOfGrossIncome / 100));
+			}
+			if (amount <= 0) continue;
+
+			source.balance -= amount;
+			source.principal -= amount;
+			target.balance += amount;
+			target.principal += amount;
+		}
+
+		// 3. Plafonds & cascade : l'excédent est viré vers le compte de débordement.
 		// Plusieurs passes pour gérer les chaînes (A déborde vers B, qui déborde vers C).
 		for (let pass = 0; pass < 4; pass++) {
 			let moved = false;
@@ -336,7 +379,7 @@ function runSimulation(
 			if (!moved) break;
 		}
 
-		// 3. Enregistre les points du mois.
+		// 4. Enregistre les points du mois.
 		for (const r of runtimes) {
 			perById.get(r.account.id)!.points.push({
 				monthIndex: m,
@@ -459,6 +502,132 @@ export function projectProjection(
 }
 
 /**
+ * Ordonne les comptes de financement d'un projet du premier au dernier à
+ * débiter lors de sa clôture. Le compte courant (non rémunéré) part toujours
+ * en premier. Pour un achat immobilier, l'ordre usuel PEE > Livret > PEA
+ * s'applique ensuite ; sinon, on draine en priorité les comptes les moins
+ * rémunérateurs pour laisser les meilleurs continuer à fructifier.
+ */
+export function withdrawalOrder(project: Project, accounts: Account[], year: number): Account[] {
+	const isImmo = project.category === 'maison';
+	const immoOrder: AccountType[] = ['pee', 'livret', 'pea'];
+
+	function bucket(a: Account): number {
+		if (a.type === 'courant') return 0;
+		if (isImmo) {
+			const idx = immoOrder.indexOf(a.type);
+			return idx >= 0 ? 1 + idx : 1 + immoOrder.length;
+		}
+		return 1;
+	}
+
+	return [...accounts].sort((x, y) => {
+		const b = bucket(x) - bucket(y);
+		if (b !== 0) return b;
+		return rateForYear(x, year) - rateForYear(y, year); // à égalité : le moins rémunérateur d'abord
+	});
+}
+
+/** Répartit un retrait sur des comptes déjà ordonnés, dans la limite du solde de chacun. */
+export function distributeWithdrawal(amount: number, orderedAccounts: Account[]): Record<string, number> {
+	const out: Record<string, number> = {};
+	let remaining = amount;
+	for (const a of orderedAccounts) {
+		if (remaining <= 0.005) break;
+		const take = Math.min(remaining, Math.max(0, a.balance));
+		if (take > 0) {
+			out[a.id] = take;
+			remaining -= take;
+		}
+	}
+	return out;
+}
+
+/**
+ * Modélise, pour chaque projet actif (non terminé), le retrait de son montant
+ * cible à sa date d'échéance (explicite, sinon estimée), réparti sur ses
+ * comptes de financement selon `withdrawalOrder`. Le but d'un projet est
+ * d'être dépensé : sans ça, la simulation globale surestimerait le patrimoine
+ * en laissant fructifier indéfiniment de l'argent déjà destiné à un achat.
+ *
+ * Les retraits sont appliqués **dans l'ordre chronologique** de leurs
+ * échéances : quand plusieurs projets partagent un compte, chacun ne voit que
+ * ce qui reste après les retraits des projets déjà clôturés avant lui. Sans
+ * ça, deux projets visant la même échéance et le même compte se croiraient
+ * chacun seuls à disposer du solde total, et le compte pourrait finir négatif
+ * une fois les deux retraits réellement cumulés.
+ *
+ * Renvoie des événements de vie synthétiques, prêts à être fusionnés dans
+ * `opts.lifeEvents` d'une simulation de portefeuille complet.
+ */
+export function computeProjectWithdrawals(
+	projects: Project[],
+	accounts: Account[],
+	horizonMonths: number,
+	opts: SimOptions = {}
+): LifeEvent[] {
+	// `allAccounts` doit toujours couvrir l'univers complet des comptes, même
+	// quand on ne simule que le sous-ensemble finançant un projet donné : sinon
+	// les poids d'allocation du plan de revenus se recalculent sur ce
+	// sous-ensemble restreint, et un compte peut se voir attribuer 100 % de la
+	// capacité d'épargne au lieu de sa part réelle — gonflant artificiellement
+	// son solde projeté et faussant tous les retraits calculés à partir de lui.
+	const baseOpts: SimOptions = { ...opts, allAccounts: opts.allAccounts ?? accounts };
+	const start = baseOpts.start ?? new Date();
+	const active = projects.filter((p) => !p.completed);
+
+	// 1. Détermine la date de retrait de chaque projet (référence : simulation
+	// sans aucun retrait), pour pouvoir les traiter dans l'ordre chronologique.
+	const dated: { project: Project; fundingAccounts: Account[]; targetDate: Date }[] = [];
+	for (const project of active) {
+		const fundingAccounts = project.fundingAccountIds.length
+			? accounts.filter((a) => project.fundingAccountIds.includes(a.id))
+			: accounts;
+		if (fundingAccounts.length === 0) continue;
+
+		const { total } = simulatePortfolio(fundingAccounts, horizonMonths, baseOpts);
+		const targetDate = project.targetDate
+			? new Date(project.targetDate)
+			: total.find((p) => p.balance >= project.targetAmount)?.date;
+		if (targetDate) dated.push({ project, fundingAccounts, targetDate });
+	}
+	dated.sort((a, b) => a.targetDate.getTime() - b.targetDate.getTime());
+
+	// 2. Rejoue les retraits un par un, dans l'ordre : chaque projet réévalue le
+	// solde disponible en tenant compte des retraits déjà décidés avant lui.
+	const events: LifeEvent[] = [];
+	for (const { project, fundingAccounts, targetDate } of dated) {
+		const m = Math.min(horizonMonths, Math.max(0, monthsBetween(start, targetDate)));
+		const { per } = simulatePortfolio(fundingAccounts, m, {
+			...baseOpts,
+			lifeEvents: [...(baseOpts.lifeEvents ?? []), ...events]
+		});
+		const atDate = fundingAccounts.map((a) => {
+			const pts = per.find((p) => p.account.id === a.id)?.points;
+			const balance = pts ? pts[pts.length - 1].balance : a.balance;
+			return { ...a, balance };
+		});
+
+		const amount = Math.min(project.targetAmount, atDate.reduce((s, a) => s + Math.max(0, a.balance), 0));
+		if (amount <= 0) continue;
+
+		const ordered = withdrawalOrder(project, atDate, targetDate.getFullYear());
+		const withdrawals = distributeWithdrawal(amount, ordered);
+		for (const [accountId, amt] of Object.entries(withdrawals)) {
+			events.push({
+				id: `proj-${project.id}-${accountId}`,
+				label: `Projet : ${project.name}`,
+				year: targetDate.getFullYear(),
+				month: targetDate.getMonth() + 1,
+				amount: -amt,
+				accountId
+			});
+		}
+	}
+	return events;
+}
+
+/**
  * Répartit la valeur totale d'un portefeuille entre projets par ordre de
  * priorité (l'ordre du tableau) : le projet 1 est financé en premier jusqu'à
  * son objectif, le reste va au projet 2, etc. Mode simplifié qui considère
@@ -526,6 +695,56 @@ export function deflateSeries(points: SimPoint[], inflationPct: number): SimPoin
 			interest: p.interest / factor
 		};
 	});
+}
+
+// ---- Indépendance financière (rente) ----------------------------------------
+
+/** Capital nécessaire pour tirer une rente mensuelle donnée, au taux de retrait choisi. */
+export function capitalNeededForRente(monthlyAmount: number, withdrawalRatePct: number): number {
+	if (withdrawalRatePct <= 0) return Infinity;
+	return (monthlyAmount * 12) / (withdrawalRatePct / 100);
+}
+
+/** Rente mensuelle que peut soutenir un capital donné, au taux de retrait choisi. */
+export function renteFromCapital(capital: number, withdrawalRatePct: number): number {
+	return (capital * (withdrawalRatePct / 100)) / 12;
+}
+
+/**
+ * Classification indicative des types de compte pour l'allocation « croissance
+ * vs sécurisé ». Approximatif par nature (un PEE peut être investi en fonds
+ * euro, une assurance-vie en unités de compte…) : sert de repère, pas de conseil
+ * personnalisé.
+ */
+export const GROWTH_ACCOUNT_TYPES: AccountType[] = ['pea', 'cto', 'pee', 'per'];
+export const SAFE_ACCOUNT_TYPES: AccountType[] = ['courant', 'livret', 'especes', 'assurance_vie', 'autre'];
+
+export function isGrowthAccount(type: AccountType): boolean {
+	return GROWTH_ACCOUNT_TYPES.includes(type);
+}
+
+/** Répartition actuelle du patrimoine entre comptes « croissance » et « sécurisés ». */
+export function currentAllocationSplit(accounts: Account[]): { growth: number; safe: number } {
+	let growth = 0;
+	let safe = 0;
+	for (const a of accounts) {
+		if (isGrowthAccount(a.type)) growth += a.balance;
+		else safe += a.balance;
+	}
+	return { growth, safe };
+}
+
+/**
+ * Répartition cible indicative selon l'horizon avant l'indépendance financière :
+ * glide path classique, plus l'échéance approche, plus on sécurise le capital.
+ * Simple règle de bon sens, pas un conseil personnalisé.
+ */
+export function recommendedAllocation(yearsToGoal: number): { growthPct: number; safePct: number } {
+	let growthPct: number;
+	if (yearsToGoal >= 15) growthPct = 70;
+	else if (yearsToGoal >= 5) growthPct = 50;
+	else growthPct = 30;
+	return { growthPct, safePct: 100 - growthPct };
 }
 
 /**

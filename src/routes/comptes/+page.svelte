@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { store } from '$lib/store.svelte';
 	import { money, percent, contributionLabel, monthYear } from '$lib/format';
-	import { ACCOUNT_TYPES, COMPOUNDINGS, type Account } from '$lib/types';
+	import { ACCOUNT_TYPES, COMPOUNDINGS, MONTHS, type Account } from '$lib/types';
 	import { rateForYear, catchUpAccount } from '$lib/finance';
 	import Modal from '$lib/components/Modal.svelte';
 	import AccountForm from '$lib/components/AccountForm.svelte';
@@ -31,6 +31,21 @@
 	function openEdit(a: Account) {
 		editing = a;
 		showForm = true;
+	}
+
+	function addTransferRule() {
+		if (store.accounts.length < 2) return;
+		store.addTransferRule({
+			label: '',
+			fromAccountId: store.accounts[0].id,
+			toAccountId: store.accounts[1].id,
+			frequency: 'annual',
+			month: 12,
+			maxPctOfGrossIncome: undefined,
+			maxAmount: undefined,
+			minSourceBalance: undefined,
+			enabled: true
+		});
 	}
 </script>
 
@@ -132,6 +147,112 @@
 			</div>
 		{/each}
 	</div>
+
+	{#if store.accounts.length >= 2}
+		<div class="card card-pad" style="margin-top:16px">
+			<div class="spread" style="margin-bottom:6px">
+				<h3>🔀 Règles de virement automatique</h3>
+			</div>
+			<p class="muted" style="font-size:13px;margin:0 0 14px">
+				Déplacent de l'argent entre deux comptes selon une fréquence et des plafonds — par exemple
+				un versement PEE une fois par an, limité à 25 % du salaire brut.
+			</p>
+
+			{#if store.transferRules.length === 0}
+				<p class="hint" style="margin:0 0 10px">Aucune règle pour l'instant.</p>
+			{:else}
+				<div class="rules">
+					{#each store.transferRules as r (r.id)}
+						<div class="rule-row" class:disabled={!r.enabled}>
+							<input
+								class="input rule-label"
+								type="text"
+								placeholder="Libellé (ex. Versement PEE)"
+								value={r.label}
+								oninput={(e) => store.updateTransferRule(r.id, { label: (e.target as HTMLInputElement).value })}
+							/>
+							<select
+								class="select"
+								value={r.fromAccountId}
+								onchange={(e) => store.updateTransferRule(r.id, { fromAccountId: (e.target as HTMLSelectElement).value })}
+							>
+								{#each store.accounts as a (a.id)}
+									<option value={a.id}>{a.name}</option>
+								{/each}
+							</select>
+							<span class="arrow">→</span>
+							<select
+								class="select"
+								value={r.toAccountId}
+								onchange={(e) => store.updateTransferRule(r.id, { toAccountId: (e.target as HTMLSelectElement).value })}
+							>
+								{#each store.accounts as a (a.id)}
+									<option value={a.id}>{a.name}</option>
+								{/each}
+							</select>
+							<select
+								class="select"
+								value={r.frequency}
+								onchange={(e) => store.updateTransferRule(r.id, { frequency: (e.target as HTMLSelectElement).value as 'monthly' | 'annual' })}
+							>
+								<option value="monthly">chaque mois</option>
+								<option value="annual">une fois par an</option>
+							</select>
+							{#if r.frequency === 'annual'}
+								<select
+									class="select"
+									value={r.month ?? 12}
+									onchange={(e) => store.updateTransferRule(r.id, { month: Number((e.target as HTMLSelectElement).value) })}
+								>
+									{#each MONTHS as m, i}
+										<option value={i + 1}>{m}</option>
+									{/each}
+								</select>
+							{/if}
+							<div class="input-affix rule-cap">
+								<input
+									type="number"
+									step="1"
+									placeholder="illimité"
+									value={r.maxPctOfGrossIncome ?? ''}
+									oninput={(e) => {
+										const v = (e.target as HTMLInputElement).value;
+										store.updateTransferRule(r.id, { maxPctOfGrossIncome: v === '' ? undefined : parseFloat(v) });
+									}}
+								/>
+								<span class="affix">% brut</span>
+							</div>
+							<div class="input-affix rule-cap">
+								<input
+									type="number"
+									step="any"
+									placeholder="illimité"
+									value={r.maxAmount ?? ''}
+									oninput={(e) => {
+										const v = (e.target as HTMLInputElement).value;
+										store.updateTransferRule(r.id, { maxAmount: v === '' ? undefined : parseFloat(v) });
+									}}
+								/>
+								<span class="affix">{store.settings.currency} max</span>
+							</div>
+							<label class="rule-toggle">
+								<input
+									type="checkbox"
+									checked={r.enabled}
+									onchange={(e) => store.updateTransferRule(r.id, { enabled: (e.target as HTMLInputElement).checked })}
+								/>
+							</label>
+							<button class="btn btn-icon btn-ghost" onclick={() => store.removeTransferRule(r.id)} aria-label="Retirer la règle">✕</button>
+						</div>
+					{/each}
+				</div>
+			{/if}
+
+			<button type="button" class="btn btn-sm" onclick={addTransferRule} style="margin-top:10px">
+				＋ Ajouter une règle
+			</button>
+		</div>
+	{/if}
 {/if}
 
 <Modal bind:open={showForm} title={editing ? 'Modifier le compte' : 'Nouveau compte'} width={600}>
@@ -259,5 +380,51 @@
 	.rv {
 		font-weight: 700;
 		font-size: 13px;
+	}
+	.rules {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.rule-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+		padding: 8px;
+		border-radius: 9px;
+		background: var(--surface-2);
+	}
+	.rule-row.disabled {
+		opacity: 0.55;
+	}
+	.rule-label {
+		flex: 1 1 160px;
+		min-width: 140px;
+	}
+	.rule-cap {
+		width: 130px;
+	}
+	.arrow {
+		color: var(--text-faint);
+		font-weight: 700;
+	}
+	.rule-toggle {
+		display: flex;
+		align-items: center;
+	}
+	.rule-toggle input {
+		width: 18px;
+		height: 18px;
+		accent-color: var(--brand);
+	}
+	@media (max-width: 900px) {
+		.rule-row {
+			flex-direction: column;
+			align-items: stretch;
+		}
+		.rule-row > * {
+			width: 100%;
+		}
 	}
 </style>
