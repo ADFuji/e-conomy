@@ -1,7 +1,14 @@
 <script lang="ts">
 	import { store } from '$lib/store.svelte';
 	import { money, percent, monthYear } from '$lib/format';
-	import { simulatePortfolio, simulateScenarios, yearlyMilestones, deflateSeries, type SimPoint } from '$lib/finance';
+	import {
+		simulatePortfolio,
+		simulateScenarios,
+		yearlyMilestones,
+		deflateSeries,
+		computeProjectWithdrawals,
+		type SimPoint
+	} from '$lib/finance';
 	import { ACCOUNT_TYPES } from '$lib/types';
 	import LineChart from '$lib/components/LineChart.svelte';
 
@@ -25,7 +32,19 @@
 
 	const months = $derived(horizon * 12);
 	const activeAccounts = $derived(store.accounts.filter((a) => selectedIds.includes(a.id)));
-	const simOpts = $derived({ plan: store.incomePlan, lifeEvents: store.lifeEvents, allAccounts: store.accounts });
+	const baseOpts = $derived({
+		plan: store.incomePlan,
+		lifeEvents: store.lifeEvents,
+		allAccounts: store.accounts,
+		transferRules: store.transferRules
+	});
+	// Le but d'un projet est d'être dépensé : on modélise son retrait à l'échéance
+	// pour que la projection ne surestime pas un patrimoine qui fructifierait
+	// indéfiniment alors qu'une partie est déjà destinée à être utilisée.
+	const projectWithdrawals = $derived(
+		computeProjectWithdrawals(store.projects, store.accounts, months, baseOpts)
+	);
+	const simOpts = $derived({ ...baseOpts, lifeEvents: [...store.lifeEvents, ...projectWithdrawals] });
 	const sim = $derived(simulatePortfolio(activeAccounts, months, simOpts));
 
 	const scenarios = $derived(

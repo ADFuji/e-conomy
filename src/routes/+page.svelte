@@ -1,7 +1,13 @@
 <script lang="ts">
 	import { store } from '$lib/store.svelte';
 	import { money, percent, fullDate, durationFromNow, monthYear } from '$lib/format';
-	import { simulatePortfolio, projectProjection, deflateSeries, monthsBetween } from '$lib/finance';
+	import {
+		simulatePortfolio,
+		projectProjection,
+		deflateSeries,
+		monthsBetween,
+		computeProjectWithdrawals
+	} from '$lib/finance';
 	import { PROJECT_CATEGORIES, ACCOUNT_TYPES } from '$lib/types';
 	import LineChart from '$lib/components/LineChart.svelte';
 	import DonutChart from '$lib/components/DonutChart.svelte';
@@ -11,8 +17,22 @@
 
 	let realTerms = $state(false);
 
-	const simOpts = $derived({ plan: store.incomePlan, lifeEvents: store.lifeEvents });
-	const sim = $derived(simulatePortfolio(store.accounts, months, simOpts));
+	const simOpts = $derived({
+		plan: store.incomePlan,
+		lifeEvents: store.lifeEvents,
+		transferRules: store.transferRules
+	});
+	// Le but d'un projet est d'être dépensé : on modélise le retrait de chaque
+	// projet actif à son échéance pour que le patrimoine projeté reste réaliste.
+	const projectWithdrawals = $derived(
+		computeProjectWithdrawals(store.projects, store.accounts, months, simOpts)
+	);
+	const sim = $derived(
+		simulatePortfolio(store.accounts, months, {
+			...simOpts,
+			lifeEvents: [...store.lifeEvents, ...projectWithdrawals]
+		})
+	);
 	const displayedTotal = $derived(
 		realTerms ? deflateSeries(sim.total, store.settings.generalInflationPct) : sim.total
 	);
@@ -22,6 +42,8 @@
 	const donutSlices = $derived(
 		store.accounts.map((a) => ({ label: a.name, value: a.balance, color: a.color }))
 	);
+	// Un projet terminé a déjà été financé et n'est plus un objectif « actif ».
+	const activeProjects = $derived(store.projects.filter((p) => !p.completed));
 
 	function catInfo(v: string) {
 		return PROJECT_CATEGORIES.find((c) => c.value === v);
@@ -82,7 +104,7 @@
 		</div>
 		<div class="card card-pad stat">
 			<span class="section-title">Projets actifs</span>
-			<span class="stat-value">{store.projects.length}</span>
+			<span class="stat-value">{activeProjects.length}</span>
 			<a href="/projets" class="faint link">Gérer les projets →</a>
 		</div>
 	</div>
@@ -153,11 +175,11 @@
 				<h3>Objectifs</h3>
 				<a href="/projets" class="btn btn-sm">Tous →</a>
 			</div>
-			{#if store.projects.length === 0}
-				<p class="muted">Aucun projet. <a href="/projets" class="link">Définissez un objectif</a>.</p>
+			{#if activeProjects.length === 0}
+				<p class="muted">Aucun projet actif. <a href="/projets" class="link">Définissez un objectif</a>.</p>
 			{:else}
 				<div class="proj-list">
-					{#each store.projects as p (p.id)}
+					{#each activeProjects as p (p.id)}
 						{@const proj = projectProjection(p, store.accounts, months, simOpts)}
 						<div class="proj">
 							<div class="spread">

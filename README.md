@@ -138,6 +138,33 @@ Le solveur utilise une recherche par bissection sur la simulation complète :
 - Événements
 - Répartition entre comptes
 
+## Clôture d'un projet
+
+Le but d'un projet est d'être dépensé, pas de fructifier indéfiniment.
+
+Marquer un projet comme **terminé** retire son montant des comptes qui le financent, réparti selon un ordre logique :
+
+- Le compte courant (non rémunéré) est toujours débité en premier
+- Pour un achat immobilier : PEE → Livret → PEA, après le compte courant
+- Sinon : du compte le moins rémunérateur au plus rémunérateur
+
+Les projets **actifs** sont eux-mêmes modélisés comme des dépenses futures dans les simulations globales (dashboard, simulations, indépendance financière) : l'argent qui leur est destiné n'est pas compté comme s'il allait fructifier indéfiniment.
+
+Un aperçu du retrait (compte par compte) est affiché avant confirmation. Les projets terminés restent consultables, avec la possibilité de les rouvrir.
+
+---
+
+# 🔀 Règles de virement automatique
+
+Au-delà des plafonds simples, définissez des règles de virement entre deux comptes avec des contraintes réalistes :
+
+- Fréquence : chaque mois, ou une fois par an à un mois donné
+- Montant maximum par exécution
+- Plafond exprimé en **% du salaire brut annuel** (plan de revenus)
+- Solde minimum à laisser sur le compte source
+
+Exemple : un versement sur un PEE une fois par an, juste après le calcul des intérêts, plafonné à 25 % du salaire brut.
+
 ---
 
 # 📈 Simulations
@@ -226,6 +253,19 @@ Interface responsive :
 
 ---
 
+# 🏖️ Indépendance financière
+
+À partir de quel capital pouvez-vous vous verser une rente qui couvre vos frais fixes ?
+
+- Capital nécessaire calculé selon un taux de retrait configurable (ex. 4 %/an, la « règle des 4 % »)
+- Projection du patrimoine jusqu'à l'échéance estimée, comparée au capital nécessaire
+- Répartition **croissance / sécurisé** actuelle du patrimoine
+- Cible indicative de répartition selon l'horizon restant (glide path : plus l'échéance est lointaine, plus on vise la croissance)
+
+Repère indicatif, pas un conseil personnalisé.
+
+---
+
 # 🛡️ Fiabilité
 
 ## Soldes datés
@@ -251,7 +291,7 @@ afin de garder le tableau de bord et les simulations alignés.
 
 ## Tests
 
-Le moteur financier est couvert par Vitest :
+Le moteur financier est couvert par Vitest (52 tests) :
 
 - Régression linéaire
 - Capitalisation
@@ -259,6 +299,9 @@ Le moteur financier est couvert par Vitest :
 - Gestion des plafonds
 - Cascade de comptes
 - Solveur d'objectif
+- Ordre et répartition des retraits de projet
+- Règles de virement automatique (fréquence, plafonds)
+- Capital nécessaire à la rente
 - Migration de données
 - Chiffrement
 

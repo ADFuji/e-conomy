@@ -144,7 +144,7 @@
 			</div>
 		</div>
 
-		<div class="setting" style="border-bottom:none">
+		<div class="setting">
 			<div>
 				<div class="s-label">Écart des scénarios</div>
 				<div class="faint" style="font-size:13px">Points de taux ajoutés/retirés pour les projections optimiste/pessimiste.</div>
@@ -152,6 +152,17 @@
 			<div class="input-affix" style="max-width:120px">
 				<input type="number" step="0.1" bind:value={store.settings.scenarioDeltaPct} />
 				<span class="affix">pts</span>
+			</div>
+		</div>
+
+		<div class="setting" style="border-bottom:none">
+			<div>
+				<div class="s-label">Taux de retrait pour la rente</div>
+				<div class="faint" style="font-size:13px">Utilisé sur la page Indépendance pour estimer le capital nécessaire (ex. 4 % = « règle des 4 % »).</div>
+			</div>
+			<div class="input-affix" style="max-width:120px">
+				<input type="number" step="0.1" bind:value={store.settings.withdrawalRatePct} />
+				<span class="affix">%/an</span>
 			</div>
 		</div>
 	</div>

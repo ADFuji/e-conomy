@@ -172,6 +172,14 @@
 					</div>
 				</div>
 				<div class="field">
+					<label for="inc-gross">Salaire brut mensuel</label>
+					<div class="input-affix">
+						<input id="inc-gross" type="number" step="any" bind:value={plan.grossMonthlyIncome} />
+						<span class="affix">{store.settings.currency}</span>
+					</div>
+					<span class="hint">Sert de référence aux règles de virement plafonnées en % du brut (ex. PEE).</span>
+				</div>
+				<div class="field">
 					<label for="raise">Évolution annuelle</label>
 					<div class="input-affix">
 						<input id="raise" type="number" step="0.1" bind:value={plan.annualRaisePct} />

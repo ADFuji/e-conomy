@@ -37,7 +37,8 @@
 		start: baselineStart,
 		plan: store.incomePlan,
 		lifeEvents: store.lifeEvents,
-		allAccounts: store.accounts
+		allAccounts: store.accounts,
+		transferRules: store.transferRules
 	});
 	const baselineSim = $derived(
 		earliest ? simulatePortfolio(baselineAccounts, totalHorizonMonths, simOpts) : null
