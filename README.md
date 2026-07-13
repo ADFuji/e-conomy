@@ -1,183 +1,289 @@
 # 💶 e-conomy
 
-Application de **planification de budget et d'épargne**. Définissez des **projets**
-(achat maison, voiture, épargne de précaution…), déclarez vos **comptes en banque**
-avec leurs **taux d'intérêt par année**, modélisez vos **revenus**, et visualisez la
-puissance des **intérêts composés** sur 1 à 30 ans.
+Application de **planification financière personnelle** permettant de simuler un budget, une stratégie d'épargne et l'évolution d'un patrimoine dans le temps.
 
-> 🔒 **100 % local** — vos données restent dans votre navigateur (localStorage).
-> Aucun serveur, aucun compte, aucune donnée envoyée nulle part. Sauvegarde
-> chiffrable par mot de passe, application installable (PWA).
+Créez vos **projets** (achat immobilier, voiture, épargne de précaution…), configurez vos **comptes financiers** avec leurs rendements, modélisez vos **revenus et dépenses**, puis visualisez l'impact des **intérêts composés** sur une période de 1 à 30 ans.
 
-## Fonctionnalités
+> 🔒 **100 % local** — vos données restent dans votre navigateur (`localStorage`).  
+> Aucun serveur, aucun compte utilisateur, aucune donnée transmise.  
+> Export chiffré par mot de passe disponible. Application installable en **PWA**.
 
-### Comptes
-- Compte courant, Livret A, PEE, PER, PEA, assurance-vie, compte-titres…
-- **Versements programmés** : mensuels et/ou annuels à une date choisie.
-- **Taux d'intérêt par année civile**, passé comme futur. Les années non renseignées
-  sont **extrapolées par régression linéaire** (la tangente de la tendance) ou par un
-  taux de repli.
-- **Capitalisation** annuelle, mensuelle ou **journalière** (type Revolut).
-- **Plafonds réglementaires** (ex. Livret A) avec **débordement automatique** en
-  cascade vers un compte de repli quand le plafond est atteint.
-- **Fiscalité** optionnelle sur les intérêts (ex. PFU 30 %), appliquée mois par mois.
+---
 
-### Revenus
-- Modélisez votre **salaire net**, sa croissance annuelle et des **augmentations
-  ponctuelles**.
-- Détaillez vos **besoins vitaux poste par poste** (loyer, courses, énergie…) avec
-  leur propre inflation.
-- Stratégie d'épargne à deux leviers : part du surplus actuel épargnée, et surtout
-  **part des augmentations investie** (« mes besoins sont couverts, j'investis ce que
-  je gagne en plus »).
-- **Événements de vie** : dépenses ou rentrées ponctuelles planifiées sur un compte à
-  une date donnée (achat, prime, travaux…).
-- La capacité d'épargne qui en résulte est **répartie sur vos comptes** et alimente
-  automatiquement les simulations.
+# Fonctionnalités
 
-### Projets
-- Objectifs chiffrés avec date cible optionnelle, financés par tout ou partie de vos
-  comptes. e-conomy estime **la date d'atteinte** au rythme actuel.
-- **Jalons** (25/50/75/100 %) avec date réelle d'atteinte déduite de vos pointages.
-- Mode **priorité** : quand plusieurs projets partagent l'épargne, définissez un ordre
-  (réorganisable par glisser des flèches) — le premier est financé en premier.
-- **Solveur d'objectif inversé** : « combien dois-je épargner par mois pour tenir la
-  date cible ? », résolu par bissection sur la simulation réelle (taux, plafonds,
-  fiscalité, événements inclus).
+## 💳 Comptes
 
-### Simulations
-- Vue *total cumulé* ou *comparaison par compte*, tableau détaillé année par année.
-- **Scénarios optimiste / pessimiste** (± un écart de taux configurable).
-- **Comparateur de scénario B** : testez un versement ou un écart de taux alternatif
-  sans modifier vos données.
-- Affichage **en euros constants** (déflaté de l'inflation générale).
+- Gestion de différents types de comptes :
+  - Compte courant
+  - Livret A
+  - PEE
+  - PER
+  - PEA
+  - Assurance-vie
+  - Compte-titres
+  - Comptes personnalisés
 
-### Pointage
-- Enregistrez le **solde réel** de chaque compte chaque mois.
-- Comparaison **prévu vs réel**, patrimoine réel raccordé à la projection future.
-- Alimente automatiquement les jalons atteints des projets.
+- Versements programmés :
+  - Mensuels
+  - Annuels avec date configurable
 
-### Réglages & données
-- Thème clair / sombre / système, devise, inflation générale, écart des scénarios.
-- **Export / import JSON**, avec option de **chiffrement par mot de passe**
-  (AES-256-GCM via Web Crypto, tout se passe dans le navigateur).
-- **Installable (PWA)** : manifest + service worker pour un usage hors-ligne basique.
-- **Navigation mobile** : tab bar en bas d'écran sous 700 px, tableaux (pointage)
-  adaptés en cartes empilées.
+- Gestion des rendements :
+  - Taux par année civile (passé et futur)
+  - Extrapolation automatique des années manquantes par régression linéaire
+  - Taux de repli configurable
 
-### Fiabilité
-- **Soldes datés** : chaque compte a une `balanceDate`. Si elle n'est plus le mois
-  courant, la simulation **rattrape automatiquement** le solde (rendement,
-  versements, événements de vie connus) avant de projeter le futur — plus besoin
-  de rouvrir l'app chaque mois pour que les chiffres restent justes.
-- **Réconciliation pointage → comptes** : un bouton reporte le dernier pointage sur
-  les soldes réels, pour que dashboard et pointage racontent toujours la même histoire.
-- **Suite de tests** (Vitest) sur le moteur de simulation : régression linéaire,
-  capitalisation, fiscalité, cascade de plafonds, solveur, migrations, chiffrement.
+- Modes de capitalisation :
+  - Annuelle
+  - Mensuelle
+  - Journalière (type intérêts quotidiens)
 
-## Stack
+- Gestion des plafonds :
+  - Plafonds réglementaires (ex : Livret A)
+  - Débordement automatique vers un compte relais
+  - Cascade de plusieurs comptes possible
 
-SvelteKit 2 + Svelte 5 (runes) + TypeScript, rendu 100 % client (adapter-static en
-mode SPA). Graphiques en SVG maison, aucune dépendance de visualisation. Tests
-avec Vitest.
+- Fiscalité optionnelle :
+  - Exemple : PFU 30 %
+  - Application uniquement sur les intérêts générés
 
-## Développement
+---
 
-```sh
+# 💰 Revenus
+
+Modélisez votre évolution financière :
+
+- Salaire net initial
+- Croissance annuelle
+- Augmentations ponctuelles
+
+Gestion détaillée des dépenses :
+
+- Loyer
+- Alimentation
+- Énergie
+- Transport
+- Loisirs
+- Toute dépense personnalisée
+
+Chaque poste possède sa propre inflation.
+
+## Stratégie d'épargne avancée
+
+Deux leviers sont disponibles :
+
+1. Épargne d'une partie du surplus actuel
+2. Investissement automatique des futures augmentations :
+
+> "Mes besoins sont couverts, j'investis ce que je gagne en plus."
+
+## Événements de vie
+
+Planifiez des événements ponctuels :
+
+- Achat immobilier
+- Travaux
+- Prime
+- Dépense exceptionnelle
+- Entrée d'argent
+
+Ces événements sont automatiquement intégrés aux simulations.
+
+---
+
+# 🎯 Projets
+
+Définissez vos objectifs financiers :
+
+- Montant cible
+- Date souhaitée
+- Comptes utilisés pour le financement
+
+e-conomy calcule :
+
+- La date probable d'atteinte
+- La progression actuelle
+- L'évolution future
+
+## Jalons
+
+Suivez automatiquement les étapes :
+
+- 25 %
+- 50 %
+- 75 %
+- 100 %
+
+Les dates réelles d'atteinte sont calculées depuis vos pointages.
+
+## Priorisation
+
+Lorsque plusieurs projets utilisent la même capacité d'épargne :
+
+- Définissez un ordre de priorité
+- Réorganisez facilement les projets
+- Le premier projet reçoit l'épargne en priorité
+
+## Solveur d'objectif inversé
+
+Répondez à une question simple :
+
+> "Combien dois-je investir chaque mois pour atteindre mon objectif à cette date ?"
+
+Le solveur utilise une recherche par bissection sur la simulation complète :
+
+- Rendements
+- Fiscalité
+- Plafonds
+- Événements
+- Répartition entre comptes
+
+---
+
+# 📈 Simulations
+
+Visualisez votre évolution financière :
+
+- Patrimoine total cumulé
+- Détail par compte
+- Projection annuelle
+- Simulation sur 1 à 30 ans
+
+## Scénarios
+
+Comparez différentes hypothèses :
+
+- Optimiste
+- Pessimiste
+- Écart de rendement configurable
+
+## Comparateur
+
+Testez un scénario alternatif :
+
+- Nouveau versement
+- Variation de rendement
+
+Sans modifier vos données principales.
+
+## Valeur réelle
+
+Affichage possible en euros constants :
+
+- Correction par inflation
+- Comparaison du pouvoir d'achat réel
+
+---
+
+# 📌 Pointage
+
+Suivez votre patrimoine réel :
+
+- Saisie mensuelle des soldes
+- Comparaison prévu / réel
+- Reconnexion automatique avec les projections
+
+Les pointages alimentent automatiquement :
+
+- Les jalons des projets
+- Le suivi de progression
+
+---
+
+# ⚙️ Réglages & données
+
+Configuration disponible :
+
+- Thème clair / sombre / système
+- Devise
+- Inflation générale
+- Écart des scénarios
+
+## Export / import
+
+- Export JSON complet
+- Import JSON
+- Chiffrement optionnel par mot de passe
+
+Technologies utilisées :
+
+- AES-256-GCM
+- Web Crypto API
+- Traitement uniquement côté navigateur
+
+## Application PWA
+
+Disponible hors ligne :
+
+- Manifest
+- Service worker
+- Installation sur ordinateur et mobile
+
+Interface responsive :
+
+- Navigation mobile par barre inférieure
+- Tableaux convertis en cartes sous 700 px
+
+---
+
+# 🛡️ Fiabilité
+
+## Soldes datés
+
+Chaque compte possède une `balanceDate`.
+
+Si cette date est ancienne, l'application rejoue automatiquement :
+
+- Rendements
+- Versements
+- Événements planifiés
+
+avant toute nouvelle projection.
+
+Ainsi, un compte non consulté pendant plusieurs mois reste toujours cohérent.
+
+## Réconciliation
+
+Un bouton permet de synchroniser :
+- Pointage réel → Solde du compte
+
+afin de garder le tableau de bord et les simulations alignés.
+
+## Tests
+
+Le moteur financier est couvert par Vitest :
+
+- Régression linéaire
+- Capitalisation
+- Fiscalité
+- Gestion des plafonds
+- Cascade de comptes
+- Solveur d'objectif
+- Migration de données
+- Chiffrement
+
+---
+
+# 🧱 Stack technique
+
+- SvelteKit 2
+- Svelte 5 (runes)
+- TypeScript
+- Adapter-static (SPA)
+- SVG natif pour les graphiques
+- Vitest pour les tests
+
+Aucune dépendance externe de visualisation.
+
+---
+
+# 🚀 Développement
+
+```bash
 npm install
-npm run dev        # serveur de dev
+
+npm run dev        # serveur de développement
 npm run check      # vérification TypeScript / Svelte
-npm run test       # suite de tests (Vitest)
-npm run build      # build de production (dossier ./build, statique)
-npm run preview    # prévisualise le build
-```
-
-Le build est un site **statique** : déployable sur n'importe quel hébergeur de fichiers
-(GitHub Pages, Netlify, un simple dossier…).
-
-## Structure
-
-```
-src/
-  lib/
-    types.ts              # modèle de domaine (Account, Project, IncomePlan, Settings…)
-    finance.ts             # cœur métier : moteur de simulation unifié + rattrapage
-    finance.test.ts         # tests du moteur (Vitest)
-    migrations.ts            # migrations de données pures, testables
-    migrations.test.ts
-    format.ts              # formatage devise / % / dates (Intl)
-    crypto.ts               # chiffrement AES-256-GCM de l'export (Web Crypto)
-    crypto.test.ts
-    store.svelte.ts        # état global + persistance localStorage (runes)
-    components/
-      LineChart.svelte     # courbe/aire multi-séries (SVG)
-      DonutChart.svelte    # répartition (SVG)
-      Modal.svelte
-      RatesEditor.svelte   # saisie des taux par année + extrapolation
-      ContributionsEditor.svelte
-      AccountForm.svelte   # plafond, fiscalité, capitalisation…
-      ProjectForm.svelte
-  routes/
-    +layout.svelte         # coquille + navigation + enregistrement du service worker
-    +page.svelte            # tableau de bord
-    comptes/                # gestion des comptes
-    revenus/                 # plan de revenus, besoins détaillés, événements de vie
-    projets/                 # gestion des projets, priorité, jalons, solveur
-    simulations/              # outil de simulation, scénarios, comparateur
-    pointage/                 # instantanés mensuels, prévu vs réel
-    parametres/               # préférences, export/import chiffré
-static/
-  manifest.webmanifest, sw.js, icons/  # PWA
-```
-
-## Modèle de calcul
-
-Avant toute projection, `simulatePortfolio` **rattrape** chaque compte dont le solde
-est daté dans le passé (`catchUpAccount`) : il rejoue rendement, versements et
-événements de vie connus entre `balanceDate` et aujourd'hui, en réutilisant le même
-moteur. Sans ça, un compte non retouché depuis 3 mois fausserait toute la simulation.
-
-Le moteur (`runSimulation` dans `finance.ts`) simule ensuite **tous les comptes
-ensemble, mois par mois**, car certains effets sont transversaux :
-
-1. **Croissance** : le taux annuel de l'année civile (saisi, extrapolé par tangente,
-   ou taux de repli), ajusté d'un éventuel écart de scénario, converti en facteur
-   mensuel selon la capitalisation :
-
-   ```
-   annuelle    : (1 + r)^(1/12)
-   mensuelle   : 1 + r/12
-   journalière : (1 + r/365)^(jours du mois)
-   ```
-
-   Si le compte est fiscalisé, seule la part « intérêts » du facteur est amputée du
-   taux d'imposition (le capital n'est jamais taxé).
-
-2. **Versements** : fixes (mensuels/annuels), plus la part du plan de revenus
-   allouée à ce compte, plus les événements de vie du mois.
-
-3. **Plafonds & cascade** : si un compte dépasse son plafond, l'excédent est
-   transféré (plusieurs passes pour gérer les chaînes) vers son compte de
-   débordement, sans créer ni détruire de valeur.
-
-Un projet agrège ses comptes de financement (ou tous si aucun n'est sélectionné). En
-mode priorité, l'épargne totale du portefeuille est répartie en cascade entre projets
-selon leur ordre.
-
-### Capacité d'épargne (plan de revenus)
-
-```
-revenu(t)      = salaire × (1 + croissance)^t + Σ augmentations actives
-besoins(t)     = Σ postes × (1 + inflation)^t
-investi(t)     = (revenu₀ − besoins₀) × tauxBase
-               + max(0, [revenu(t) − revenu₀] − [besoins(t) − besoins₀]) × tauxAugmentations
-```
-
-### Solveur d'objectif inversé
-
-`requiredMonthlyContribution` cherche par **bissection** le versement mensuel
-supplémentaire (réparti sur les comptes de financement) qui fait atteindre l'objectif
-exactement à la date cible, en réutilisant le moteur de simulation complet — taux,
-plafonds, fiscalité et événements de vie inclus.
- 
- 
+npm run test       # tests Vitest
+npm run build      # build production
+npm run preview    # prévisualisation du build
