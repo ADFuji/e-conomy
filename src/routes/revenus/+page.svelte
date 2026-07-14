@@ -6,6 +6,7 @@
 		monthlyExpensesAt,
 		monthlyInvestableAt,
 		incomeAllocationWeights,
+		monthlyBudgetAt,
 		totalExpenses,
 		type SimPoint
 	} from '$lib/finance';
@@ -46,6 +47,9 @@
 	const currentSurplus = $derived(Math.max(0, plan.netMonthlyIncome - expensesTotal));
 	const investNow = $derived(store.incomeMonthlySavings);
 	const investEnd = $derived(series.invest[series.invest.length - 1]?.balance ?? 0);
+
+	// Budget du mois courant : reste à vivre = revenu − besoins − épargne totale.
+	const budget = $derived(monthlyBudgetAt(plan, store.accounts, 0, new Date()));
 
 	// Allocation normalisée pour l'affichage.
 	const weights = $derived(incomeAllocationWeights(plan, store.accounts));
@@ -139,6 +143,32 @@
 			<span class="stat-value">{money(series.cumul)}</span>
 			<span class="faint">versé via vos revenus</span>
 		</div>
+	</div>
+
+	<!-- Reste à vivre + garde-fou budgétaire -->
+	<div class="card card-pad budget-card" class:over={budget.remaining < 0} style="margin-top:16px">
+		<div class="budget-top">
+			<div>
+				<span class="section-title">Reste à vivre</span>
+				<div class="budget-value {budget.remaining < 0 ? 'neg' : 'pos'}">{money(budget.remaining)}</div>
+			</div>
+			<div class="budget-breakdown">
+				<span>Revenu <strong class="tnum">{money(budget.income)}</strong></span>
+				<span>− Besoins <strong class="tnum">{money(budget.expenses)}</strong></span>
+				<span>− Versements fixes <strong class="tnum">{money(budget.fixedContributions)}</strong></span>
+				<span>− Épargne du plan <strong class="tnum">{money(budget.planSavings)}</strong></span>
+			</div>
+		</div>
+		{#if budget.remaining < 0}
+			<p class="budget-warn">
+				⚠️ Tu programmes {money(budget.totalSavings)} d'épargne alors que ton budget ne dégage
+				que {money(budget.income - budget.expenses)} : il manque {money(-budget.remaining)} par mois.
+			</p>
+		{/if}
+		<label class="toggle" style="margin-top:12px">
+			<input type="checkbox" bind:checked={plan.capSavingsToSurplus} />
+			<span>Plafonner automatiquement l'épargne au surplus disponible</span>
+		</label>
 	</div>
 
 	<!-- Graphique -->
@@ -438,6 +468,54 @@
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
+	}
+	.budget-card.over {
+		border-color: color-mix(in srgb, var(--neg) 40%, var(--border));
+	}
+	.budget-top {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 20px;
+		flex-wrap: wrap;
+	}
+	.budget-value {
+		font-size: 26px;
+		font-weight: 700;
+		letter-spacing: -0.02em;
+		margin-top: 2px;
+	}
+	.budget-breakdown {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 14px;
+		font-size: 13px;
+		color: var(--text-muted);
+	}
+	.budget-breakdown strong {
+		color: var(--text);
+		margin-left: 4px;
+	}
+	.budget-warn {
+		margin: 12px 0 0;
+		font-size: 13px;
+		padding: 9px 11px;
+		border-radius: 9px;
+		background: color-mix(in srgb, var(--neg) 12%, transparent);
+		color: color-mix(in srgb, var(--neg) 80%, var(--text));
+	}
+	.toggle {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		font-weight: 600;
+		font-size: 14px;
+		cursor: pointer;
+	}
+	.toggle input {
+		width: 18px;
+		height: 18px;
+		accent-color: var(--brand);
 	}
 	.link {
 		font-weight: 600;

@@ -77,6 +77,13 @@ Deux leviers sont disponibles :
 
 > "Mes besoins sont couverts, j'investis ce que je gagne en plus."
 
+## Reste à vivre & garde-fou
+
+La page Revenus affiche le **reste à vivre** mensuel (revenu − besoins −
+versements fixes − épargne du plan) et alerte quand l'épargne programmée dépasse
+le budget disponible. Une option **plafonne automatiquement** l'épargne du plan au
+surplus réellement disponible, mois par mois.
+
 ## Événements de vie
 
 Planifiez des événements ponctuels :
@@ -202,6 +209,38 @@ Affichage possible en euros constants :
 
 ---
 
+# 🩺 Conseils (insights)
+
+Le tableau de bord affiche des conseils actionnables détectés automatiquement à
+partir de vos données et de leur projection sur 24 mois, triés par gravité :
+
+- **Compte à découvert** projeté (date + montant)
+- **Budget intenable** : l'épargne programmée dépasse le surplus disponible
+- **Plafond atteint** sans compte de débordement
+- **Projets en retard** sur leur date cible
+- **Argent dormant** sur des comptes non rémunérés
+- **Pointage / solde ancien** à rafraîchir
+- **Rendement à 0 %** faute de taux renseigné pour l'année
+
+Moteur pur dans `src/lib/insights.ts` (règles testées unitairement).
+
+---
+
+# 📅 Timeline
+
+Une feuille de route chronologique de tout ce qui va se passer, regroupée par
+année et par mois :
+
+- Retraits des projets à leur clôture
+- Virements automatiques annuels (ex. versement PEE)
+- Augmentations de salaire, événements de vie
+- Plafonds atteints, objectifs projetés, dates cibles
+- Date estimée d'indépendance financière
+
+Sélecteur d'horizon (1 / 2 / 5 / 10 ans). Moteur pur dans `src/lib/timeline.ts`.
+
+---
+
 # 📌 Pointage
 
 Suivez votre patrimoine réel :
@@ -289,21 +328,25 @@ Un bouton permet de synchroniser :
 
 afin de garder le tableau de bord et les simulations alignés.
 
+## Performance
+
+Le moteur est **mémoïsé** (cache LRU à clé = sérialisation des entrées) : une
+simulation identique n'est jamais recalculée. Les pages recalculant tout à chaque
+frappe restent fluides même avec de nombreux projets (≈ 37× plus rapide sur appel
+répété mesuré).
+
 ## Tests
 
-Le moteur financier est couvert par Vitest (52 tests) :
+Le cœur métier est couvert par Vitest (79 tests) :
 
-- Régression linéaire
-- Capitalisation
-- Fiscalité
-- Gestion des plafonds
-- Cascade de comptes
-- Solveur d'objectif
-- Ordre et répartition des retraits de projet
+- Régression linéaire, capitalisation, fiscalité
+- Gestion des plafonds, cascade de comptes
+- Solveur d'objectif, ordre et répartition des retraits de projet
 - Règles de virement automatique (fréquence, plafonds)
-- Capital nécessaire à la rente
-- Migration de données
-- Chiffrement
+- Capital nécessaire à la rente, budget & plafonnement au surplus
+- Mémoïsation du moteur
+- Moteur d'insights, timeline
+- Migration de données, chiffrement
 
 ---
 

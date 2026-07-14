@@ -310,6 +310,12 @@ export interface IncomePlan {
 	raiseSavingsRate: number;
 	/** Répartition de l'épargne vers les comptes : poids relatifs par identifiant. */
 	allocation: Record<string, number>;
+	/**
+	 * Si vrai, l'épargne du plan est bornée chaque mois au surplus réellement
+	 * disponible (revenu − besoins − versements fixes des comptes) : on ne peut
+	 * plus programmer d'épargne au-delà de ce que le budget permet.
+	 */
+	capSavingsToSurplus: boolean;
 }
 
 export function createDefaultIncomePlan(): IncomePlan {
@@ -323,6 +329,7 @@ export function createDefaultIncomePlan(): IncomePlan {
 		expenseInflationPct: 2,
 		baseSavingsRate: 50,
 		raiseSavingsRate: 80,
-		allocation: {}
+		allocation: {},
+		capSavingsToSurplus: false
 	};
 }
