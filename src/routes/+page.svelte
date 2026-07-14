@@ -5,9 +5,9 @@
 		simulatePortfolio,
 		projectProjection,
 		deflateSeries,
-		monthsBetween,
 		computeProjectWithdrawals
 	} from '$lib/finance';
+	import { computeInsights } from '$lib/insights';
 	import { PROJECT_CATEGORIES, ACCOUNT_TYPES } from '$lib/types';
 	import LineChart from '$lib/components/LineChart.svelte';
 	import DonutChart from '$lib/components/DonutChart.svelte';
@@ -52,11 +52,18 @@
 		return ACCOUNT_TYPES.find((t) => t.value === v);
 	}
 
-	const lastSnapshot = $derived(
-		[...store.snapshots].sort((a, b) => a.date.localeCompare(b.date)).at(-1)
-	);
-	const monthsSincePointage = $derived(
-		lastSnapshot ? monthsBetween(new Date(lastSnapshot.date), new Date()) : null
+	const insights = $derived(
+		computeInsights(
+			{
+				accounts: store.accounts,
+				projects: store.projects,
+				plan: store.incomePlan,
+				lifeEvents: store.lifeEvents,
+				transferRules: store.transferRules,
+				snapshots: store.snapshots
+			},
+			{ money, monthYear }
+		)
 	);
 </script>
 
@@ -109,16 +116,22 @@
 		</div>
 	</div>
 
-	{#if monthsSincePointage === null || monthsSincePointage >= 2}
-		<a href="/pointage" class="pointage-nudge">
-			📍
-			{#if monthsSincePointage === null}
-				Aucun pointage enregistré — comparez vos projections au réel en 2 minutes.
-			{:else}
-				Dernier pointage {monthYear(new Date(lastSnapshot!.date))}, il y a {monthsSincePointage} mois — faites le point ?
-			{/if}
-			<span class="arrow">→</span>
-		</a>
+	{#if insights.length > 0}
+		<div class="insights">
+			<div class="section-title" style="margin-bottom:10px">🩺 Conseils</div>
+			<div class="insight-list">
+				{#each insights as ins (ins.id)}
+					<a href={ins.href ?? '#'} class="insight sev-{ins.severity}">
+						<span class="insight-icon">{ins.icon}</span>
+						<span class="insight-body">
+							<span class="insight-title">{ins.title}</span>
+							<span class="insight-detail">{ins.detail}</span>
+						</span>
+						{#if ins.href}<span class="insight-arrow">→</span>{/if}
+					</a>
+				{/each}
+			</div>
+		</div>
 	{/if}
 
 	<!-- Projection globale -->
@@ -224,29 +237,64 @@
 	.stats {
 		grid-template-columns: repeat(4, 1fr);
 	}
-	.pointage-nudge {
+	.insights {
+		margin-top: 16px;
+	}
+	.insight-list {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.insight {
 		display: flex;
 		align-items: center;
-		gap: 10px;
-		margin-top: 14px;
-		padding: 12px 16px;
+		gap: 12px;
+		padding: 12px 14px;
 		border-radius: var(--radius);
-		border: 1px dashed var(--border-strong);
 		background: var(--surface);
-		font-size: 13.5px;
-		font-weight: 600;
-		color: var(--text-muted);
+		border: 1px solid var(--border);
+		border-left: 3px solid var(--border-strong);
 		transition:
 			background 0.15s,
-			border-color 0.15s;
+			transform 0.05s;
 	}
-	.pointage-nudge:hover {
+	.insight:hover {
 		background: var(--surface-2);
-		border-color: var(--brand);
-		color: var(--text);
 	}
-	.pointage-nudge .arrow {
+	.insight:active {
+		transform: translateY(1px);
+	}
+	.insight.sev-critical {
+		border-left-color: var(--neg);
+	}
+	.insight.sev-warning {
+		border-left-color: var(--warn);
+	}
+	.insight.sev-info {
+		border-left-color: var(--brand);
+	}
+	.insight-icon {
+		font-size: 20px;
+		flex: none;
+	}
+	.insight-body {
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+		min-width: 0;
+	}
+	.insight-title {
+		font-weight: 700;
+		font-size: 14px;
+	}
+	.insight-detail {
+		font-size: 13px;
+		color: var(--text-muted);
+	}
+	.insight-arrow {
 		margin-left: auto;
+		color: var(--text-faint);
+		flex: none;
 	}
 	.stat {
 		display: flex;

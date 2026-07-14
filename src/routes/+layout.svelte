@@ -24,6 +24,7 @@
 		{ href: '/revenus', label: 'Revenus', icon: '💰' },
 		{ href: '/projets', label: 'Projets', icon: '🎯' },
 		{ href: '/simulations', label: 'Simulations', icon: '📈' },
+		{ href: '/timeline', label: 'Timeline', icon: '📅' },
 		{ href: '/pointage', label: 'Pointage', icon: '📍' },
 		{ href: '/independance', label: 'Indépendance', icon: '🏖️' },
 		{ href: '/parametres', label: 'Paramètres', icon: '⚙️' }

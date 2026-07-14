@@ -197,6 +197,44 @@ export function monthlyGrossIncomeAt(plan: IncomePlan, monthIndex: number): numb
 	return (plan.grossMonthlyIncome || 0) * Math.pow(1 + plan.annualRaisePct / 100, years);
 }
 
+export interface MonthlyBudget {
+	income: number;
+	expenses: number;
+	/** Versements programmés fixes des comptes, en équivalent mensuel lissé. */
+	fixedContributions: number;
+	/** Épargne issue du plan de revenus (base + part des augmentations). */
+	planSavings: number;
+	/** Épargne totale (versements fixes + plan). */
+	totalSavings: number;
+	/** Reste à vivre : revenu − besoins − épargne totale. Négatif = budget intenable. */
+	remaining: number;
+}
+
+/**
+ * Décompose le budget mensuel à un instant donné : revenu, besoins, versements
+ * fixes des comptes (vue lissée), épargne du plan, et « reste à vivre ».
+ */
+export function monthlyBudgetAt(
+	plan: IncomePlan,
+	accounts: Account[],
+	monthIndex: number,
+	date: Date
+): MonthlyBudget {
+	const income = monthlyIncomeAt(plan, monthIndex, date);
+	const expenses = monthlyExpensesAt(plan, monthIndex);
+	const fixedContributions = accounts.reduce((s, a) => s + monthlyEquivalent(a), 0);
+	const planSavings = monthlyInvestableAt(plan, monthIndex, date);
+	const totalSavings = fixedContributions + planSavings;
+	return {
+		income,
+		expenses,
+		fixedContributions,
+		planSavings,
+		totalSavings,
+		remaining: income - expenses - totalSavings
+	};
+}
+
 /** Fractions d'allocation (normalisées) de l'épargne vers les comptes. */
 export function incomeAllocationWeights(
 	plan: IncomePlan,
@@ -317,6 +355,17 @@ function runSimulation(
 	for (let m = 1; m <= horizonMonths; m++) {
 		const d = new Date(startD.getFullYear(), startD.getMonth() + m, 1);
 
+		// Capacité d'épargne du plan pour ce mois, éventuellement plafonnée au
+		// surplus réellement disponible (revenu − besoins − versements fixes).
+		let investable = plan ? monthlyInvestableAt(plan, m, d) : 0;
+		if (plan?.capSavingsToSurplus && investable > 0) {
+			const surplus =
+				monthlyIncomeAt(plan, m, d) -
+				monthlyExpensesAt(plan, m) -
+				allAccounts.reduce((s, a) => s + contributionForMonth(a.contributions, d), 0);
+			investable = Math.max(0, Math.min(investable, surplus));
+		}
+
 		// 1. Croissance + versements (fixes, plan de revenus, événements de vie).
 		for (const r of runtimes) {
 			const acc = r.account;
@@ -325,7 +374,7 @@ function runSimulation(
 			const factor = applyTaxToFactor(rawFactor, !!acc.taxable, acc.taxRatePct ?? 30);
 
 			const w = weights?.get(acc.id) ?? 0;
-			const incomeContrib = plan && w > 0 ? monthlyInvestableAt(plan, m, d) * w : 0;
+			const incomeContrib = w > 0 ? investable * w : 0;
 			const fixedContrib = contributionForMonth(acc.contributions, d);
 			const eventContrib = eventsByAccount.get(acc.id)?.get(m) ?? 0;
 			const contrib = fixedContrib + incomeContrib + eventContrib + extraPerAccount;
@@ -424,12 +473,60 @@ export function catchUpAccounts(accounts: Account[], asOf: Date = new Date(), li
 	return accounts.map((a) => catchUpAccount(a, asOf, lifeEvents));
 }
 
+// ---- Mémoïsation --------------------------------------------------------------
+//
+// Les pages recalculent le moteur à chaque frappe (chaque `$derived` se
+// ré-exécute). Un cache LRU à clé = sérialisation JSON des entrées évite de
+// refaire une simulation identique. `SimOptions` ne contient que des données
+// sérialisables (aucune fonction), donc la clé est fidèle : une même clé
+// implique des entrées identiques. La sérialisation lit les proxies `$state`,
+// ce qui garde la réactivité (recalcul si le contenu change, hit si identique).
+
+const MEMO_LIMIT = 64;
+
+function makeMemoCache<R>() {
+	const cache = new Map<string, R>();
+	return {
+		get(key: string): R | undefined {
+			const v = cache.get(key);
+			if (v !== undefined) {
+				cache.delete(key); // rafraîchit la récence (LRU)
+				cache.set(key, v);
+			}
+			return v;
+		},
+		set(key: string, value: R) {
+			cache.delete(key);
+			cache.set(key, value);
+			if (cache.size > MEMO_LIMIT) {
+				const oldest = cache.keys().next().value;
+				if (oldest !== undefined) cache.delete(oldest);
+			}
+		}
+	};
+}
+
+const portfolioCache = makeMemoCache<PortfolioSimulation>();
+
 /**
  * Simule un ensemble de comptes à partir d'aujourd'hui (ou de `opts.start`).
  * Rattrape d'abord chaque compte dont le solde est daté dans le passé, pour que
- * la projection démarre toujours d'un solde à jour.
+ * la projection démarre toujours d'un solde à jour. Résultat mémoïsé.
  */
 export function simulatePortfolio(
+	accounts: Account[],
+	horizonMonths: number,
+	opts: SimOptions = {}
+): PortfolioSimulation {
+	const key = JSON.stringify([accounts, horizonMonths, opts]);
+	const hit = portfolioCache.get(key);
+	if (hit) return hit;
+	const result = simulatePortfolioUncached(accounts, horizonMonths, opts);
+	portfolioCache.set(key, result);
+	return result;
+}
+
+function simulatePortfolioUncached(
 	accounts: Account[],
 	horizonMonths: number,
 	opts: SimOptions = {}
@@ -560,7 +657,23 @@ export function distributeWithdrawal(amount: number, orderedAccounts: Account[])
  * Renvoie des événements de vie synthétiques, prêts à être fusionnés dans
  * `opts.lifeEvents` d'une simulation de portefeuille complet.
  */
+const withdrawalsCache = makeMemoCache<LifeEvent[]>();
+
 export function computeProjectWithdrawals(
+	projects: Project[],
+	accounts: Account[],
+	horizonMonths: number,
+	opts: SimOptions = {}
+): LifeEvent[] {
+	const key = JSON.stringify([projects, accounts, horizonMonths, opts]);
+	const hit = withdrawalsCache.get(key);
+	if (hit) return hit;
+	const result = computeProjectWithdrawalsUncached(projects, accounts, horizonMonths, opts);
+	withdrawalsCache.set(key, result);
+	return result;
+}
+
+function computeProjectWithdrawalsUncached(
 	projects: Project[],
 	accounts: Account[],
 	horizonMonths: number,
