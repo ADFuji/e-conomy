@@ -553,7 +553,8 @@ class AppStore {
 			expenseInflationPct: 2,
 			baseSavingsRate: 45,
 			raiseSavingsRate: 85,
-			allocation: { [pee]: 1, [av]: 1, [revolut]: 2 }
+			allocation: { [pee]: 1, [av]: 1, [revolut]: 2 },
+			capSavingsToSurplus: false
 		};
 
 		this.projects = [

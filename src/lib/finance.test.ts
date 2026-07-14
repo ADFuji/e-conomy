@@ -11,6 +11,7 @@ import {
 	distributeWithdrawal,
 	estimateRate,
 	linearFit,
+	monthlyBudgetAt,
 	monthlyGrowthFactor,
 	monthsBetween,
 	recommendedAllocation,
@@ -49,6 +50,23 @@ function mkProject(overrides: Partial<Project> = {}): Project {
 		color: '#000',
 		fundingAccountIds: [],
 		createdAt: '2026-01-01T00:00:00.000Z',
+		...overrides
+	};
+}
+
+function mkPlan(overrides: Partial<IncomePlan> = {}): IncomePlan {
+	return {
+		enabled: true,
+		netMonthlyIncome: 3000,
+		grossMonthlyIncome: 3800,
+		annualRaisePct: 0,
+		raises: [],
+		expenses: [],
+		expenseInflationPct: 0,
+		baseSavingsRate: 100,
+		raiseSavingsRate: 100,
+		allocation: {},
+		capSavingsToSurplus: false,
 		...overrides
 	};
 }
@@ -314,7 +332,8 @@ describe('plan de revenus minimal', () => {
 			expenseInflationPct: 0,
 			baseSavingsRate: 100,
 			raiseSavingsRate: 100,
-			allocation: {}
+			allocation: {},
+			capSavingsToSurplus: false
 		};
 		const acc = mkAccount({ hasYield: false, balance: 0 });
 		const { total } = simulatePortfolio([acc], 6, { start: new Date(2026, 0, 1), plan });
@@ -436,7 +455,8 @@ describe('computeProjectWithdrawals', () => {
 			expenseInflationPct: 0,
 			baseSavingsRate: 100,
 			raiseSavingsRate: 100,
-			allocation: { a: 1, b: 2 }
+			allocation: { a: 1, b: 2 },
+			capSavingsToSurplus: false
 		};
 		const project = mkProject({ targetAmount: 2500, targetDate: '2026-03-01', fundingAccountIds: ['a'] });
 
@@ -467,7 +487,8 @@ describe('simulatePortfolio — règles de virement', () => {
 			expenseInflationPct: 0,
 			baseSavingsRate: 0,
 			raiseSavingsRate: 0,
-			allocation: {}
+			allocation: {},
+			capSavingsToSurplus: false
 		};
 		const rule: TransferRule = {
 			id: 'r1',
@@ -553,5 +574,105 @@ describe('rente / indépendance financière', () => {
 		expect(recommendedAllocation(20).growthPct).toBe(70);
 		expect(recommendedAllocation(10).growthPct).toBe(50);
 		expect(recommendedAllocation(2).growthPct).toBe(30);
+	});
+});
+
+describe('mémoïsation de simulatePortfolio', () => {
+	it('renvoie la même référence pour des entrées identiques (cache hit)', () => {
+		const acc = mkAccount({ id: 'm1', balance: 500, hasYield: false });
+		const opts = { start: new Date(2026, 0, 1) };
+		const a = simulatePortfolio([acc], 6, opts);
+		const b = simulatePortfolio([acc], 6, opts);
+		expect(a).toBe(b);
+	});
+
+	it('recalcule quand une entrée change, sans altérer les valeurs', () => {
+		const acc1 = mkAccount({ id: 'm2', balance: 500, hasYield: false });
+		const acc2 = mkAccount({ id: 'm2', balance: 900, hasYield: false });
+		const opts = { start: new Date(2026, 0, 1) };
+		const a = simulatePortfolio([acc1], 6, opts);
+		const b = simulatePortfolio([acc2], 6, opts);
+		expect(a).not.toBe(b);
+		expect(a.total[6].balance).toBeCloseTo(500, 6);
+		expect(b.total[6].balance).toBeCloseTo(900, 6);
+	});
+});
+
+describe('monthlyBudgetAt', () => {
+	it('décompose revenu, besoins, versements fixes et reste à vivre', () => {
+		const plan = mkPlan({
+			netMonthlyIncome: 3000,
+			expenses: [{ id: 'e', label: 'Loyer', amount: 1200 }],
+			baseSavingsRate: 0,
+			raiseSavingsRate: 0
+		});
+		const acc = mkAccount({
+			id: 'a',
+			contributions: [
+				{ id: 'c1', amount: 200, frequency: 'monthly' },
+				{ id: 'c2', amount: 1200, frequency: 'annual', month: 12 }
+			]
+		});
+		const b = monthlyBudgetAt(plan, [acc], 0, new Date(2026, 0, 1));
+		expect(b.income).toBeCloseTo(3000, 6);
+		expect(b.expenses).toBeCloseTo(1200, 6);
+		// versements fixes lissés : 200/mois + 1200/an = 300/mois
+		expect(b.fixedContributions).toBeCloseTo(300, 6);
+		expect(b.planSavings).toBeCloseTo(0, 6);
+		expect(b.remaining).toBeCloseTo(1500, 6); // 3000 - 1200 - 300
+	});
+
+	it('signale un reste à vivre négatif quand l’épargne dépasse le surplus', () => {
+		const plan = mkPlan({
+			netMonthlyIncome: 2000,
+			expenses: [{ id: 'e', label: 'x', amount: 1500 }],
+			baseSavingsRate: 100 // épargne 100% du surplus (500), mais...
+		});
+		const acc = mkAccount({ id: 'a', contributions: [{ id: 'c', amount: 800, frequency: 'monthly' }] });
+		const b = monthlyBudgetAt(plan, [acc], 0, new Date(2026, 0, 1));
+		// 2000 - 1500 - (800 fixe + 500 plan) = -800
+		expect(b.remaining).toBeCloseTo(-800, 6);
+	});
+});
+
+describe('capSavingsToSurplus', () => {
+	it('borne l’épargne du plan au surplus réel une fois les versements fixes déduits', () => {
+		// Surplus = 2000 - 1000 = 1000. Versement fixe = 700/mois. Plan voudrait
+		// épargner 100% du surplus (1000), mais il ne reste que 300 réellement.
+		const target = mkAccount({ id: 't', hasYield: false, balance: 0 });
+		const fixed = mkAccount({
+			id: 'f',
+			hasYield: false,
+			balance: 0,
+			contributions: [{ id: 'c', amount: 700, frequency: 'monthly' }]
+		});
+		const plan = mkPlan({
+			netMonthlyIncome: 2000,
+			expenses: [{ id: 'e', label: 'x', amount: 1000 }],
+			baseSavingsRate: 100,
+			raiseSavingsRate: 100,
+			allocation: { t: 1 },
+			capSavingsToSurplus: true
+		});
+		const opts = { start: new Date(2026, 0, 1), plan, allAccounts: [target, fixed] };
+		const { per } = simulatePortfolio([target, fixed], 1, opts);
+		const t = per.find((p) => p.account.id === 't')!.points[1].balance;
+		// L'épargne du plan est plafonnée à 300, pas 1000.
+		expect(t).toBeCloseTo(300, 6);
+	});
+
+	it('n’a aucun effet quand désactivé (comportement historique)', () => {
+		const target = mkAccount({ id: 't', hasYield: false, balance: 0 });
+		const plan = mkPlan({
+			netMonthlyIncome: 2000,
+			expenses: [{ id: 'e', label: 'x', amount: 1000 }],
+			baseSavingsRate: 100,
+			allocation: { t: 1 },
+			capSavingsToSurplus: false
+		});
+		const opts = { start: new Date(2026, 0, 1), plan, allAccounts: [target] };
+		const { per } = simulatePortfolio([target], 1, opts);
+		const t = per.find((p) => p.account.id === 't')!.points[1].balance;
+		expect(t).toBeCloseTo(1000, 6); // 100% du surplus, non plafonné
 	});
 });
